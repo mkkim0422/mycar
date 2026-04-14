@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    2×1 위젯 레이아웃 — 미니멀 뷰
+    ┌──────────────────────────┐
+    │  P   B2                  │  ← 파란 배경 + P 아이콘 + 구역 텍스트
+    └──────────────────────────┘
+    사진 없음. Toss Blue(#0064FF) 단색 배경에 흰 텍스트.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FF0064FF">
+
+    <!-- ── 빈 상태: 아이콘 + "기록 없음" ─────────────────────────────────── -->
+    <LinearLayout
+        android:id="@+id/ll_empty"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingHorizontal="14dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:text="📍 탭하여 주차 기록"
+            android:textColor="#FFFFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- ── 데이터 상태: P + 구역 텍스트 ─────────────────────────────────── -->
+    <LinearLayout
+        android:id="@+id/ll_data"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="14dp"
+        android:visibility="gone">
+
+        <!-- 'P' 주차 마커 -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="10dp"
+            android:alpha="0.55"
+            android:fontFamily="sans-serif-black"
+            android:letterSpacing="-0.03"
+            android:text="P"
+            android:textColor="#FFFFFFFF"
+            android:textSize="18sp" />
+
+        <!-- 구역 번호 (34sp / w900 → sans-serif-black) -->
+        <TextView
+            android:id="@+id/tv_zone"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:fontFamily="sans-serif-black"
+            android:letterSpacing="-0.04"
+            android:singleLine="true"
+            android:textColor="#FFFFFFFF"
+            android:textSize="28sp" />
+    </LinearLayout>
+
+</FrameLayout>

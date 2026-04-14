@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    2×1 위젯 메타데이터.
+    targetCellWidth/Height (API 31+) + minWidth/Height (API 21~30) 병행 선언.
+    updatePeriodMillis=1800000 → 30분(OS 최소 주기). 실시간 갱신은 MethodChannel로 처리.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:initialLayout="@layout/widget_2x1"
+    android:minHeight="40dp"
+    android:minWidth="110dp"
+    android:resizeMode="horizontal"
+    android:targetCellHeight="1"
+    android:targetCellWidth="2"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />

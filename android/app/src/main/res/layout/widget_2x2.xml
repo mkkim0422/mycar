@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    2×2 위젯 레이아웃 — 정사각형 풀블리드 사진
+    ┌──────────────┐
+    │  [사  진]    │
+    │              │
+    │▓▓▓▓▓▓▓▓▓▓▓▓│ ← 그라디언트 쉐도우
+    │  B2          │ ← 구역 텍스트(34sp/w900)
+    └──────────────┘
+    사진 없을 때: Toss Blue 배경 + 아이콘 + 안내 문구.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FF0064FF">
+
+    <!-- ── 배경 사진 (데이터 + 사진 있을 때) ──────────────────────────────── -->
+    <ImageView
+        android:id="@+id/iv_photo"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:visibility="gone" />
+
+    <!-- ── 빈 상태: 아이콘 + 안내 문구 ───────────────────────────────────── -->
+    <LinearLayout
+        android:id="@+id/ll_empty"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="📍"
+            android:textColor="#FFFFFFFF"
+            android:textSize="32sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:text="탭하여 주차 기록"
+            android:textColor="#FFFFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- ── 하단 쉐도우 오버레이 (데이터 + 사진 있을 때) ─────────────────── -->
+    <View
+        android:id="@+id/view_shadow"
+        android:layout_width="match_parent"
+        android:layout_height="90dp"
+        android:layout_gravity="bottom"
+        android:background="@drawable/widget_shadow_gradient"
+        android:visibility="gone" />
+
+    <!-- ── 데이터 상태: 구역 텍스트 (하단 고정) ──────────────────────────── -->
+    <LinearLayout
+        android:id="@+id/ll_data"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:orientation="vertical"
+        android:padding="14dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tv_zone"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:fontFamily="sans-serif-black"
+            android:letterSpacing="-0.04"
+            android:shadowColor="#80000000"
+            android:shadowDx="0"
+            android:shadowDy="1"
+            android:shadowRadius="6"
+            android:singleLine="true"
+            android:textColor="#FFFFFFFF"
+            android:textSize="34sp" />
+    </LinearLayout>
+
+</FrameLayout>

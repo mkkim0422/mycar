@@ -1,0 +1,134 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- ── 카메라 ─────────────────────────────────────────────────────────── -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- ── 저장소 (사진 저장, Android 12 이하) ──────────────────────────── -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <!-- ── Bluetooth (수동 Broadcast 방식, 지속 스캔 없음) ─────────────── -->
+    <!-- API 30 이하: 기본 Bluetooth 권한 -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <!-- API 31+: 연결된 기기 정보 접근 권한 (ACL_DISCONNECTED 인텐트 수신에 필요) -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- ── 푸시 알림 (Android 13+ 런타임 권한) ──────────────────────────── -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- ── 하드웨어 기능 선언 ─────────────────────────────────────────────── -->
+    <!-- 카메라: 핵심 기능 — 없으면 앱 설치 불가 -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="true" />
+    <!-- 블루투스: 선택적 기능 — 없어도 설치 가능 (카메라만으로 사용 가능) -->
+    <uses-feature
+        android:name="android.hardware.bluetooth"
+        android:required="false" />
+
+    <application
+        android:label="내차어디"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:enableOnBackInvokedCallback="true">
+
+        <!-- ── 메인 액티비티 ─────────────────────────────────────────────── -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+
+            <meta-data
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/NormalTheme" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            ── BluetoothDisconnectReceiver ─────────────────────────────────
+            Bluetooth 연결 해제 시 OS가 자동으로 브로드캐스트를 전달한다.
+            • exported=true  : 시스템(OS)이 외부에서 인텐트를 전달하기 위해 필요
+            • android:permission : BLUETOOTH_CONNECT 권한 보유 주체만 브로드캐스트 전달 가능
+            • 지속적인 BT 스캔 없이 OS 이벤트에만 수동적으로 반응 → 배터리 광탈 없음
+        -->
+        <receiver
+            android:name=".core.receiver.BluetoothDisconnectReceiver"
+            android:exported="true"
+            android:permission="android.permission.BLUETOOTH_CONNECT">
+            <intent-filter>
+                <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+            ── ParkingWidget2x1Provider ────────────────────────────────────
+            2×1 미니멀 위젯 (Toss Blue + 구역 텍스트).
+        -->
+        <receiver
+            android:name=".core.widget.ParkingWidget2x1Provider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/parking_widget_info_2x1" />
+        </receiver>
+
+        <!--
+            ── ParkingWidget2x2Provider ────────────────────────────────────
+            2×2 정사각형 풀블리드 사진 위젯.
+        -->
+        <receiver
+            android:name=".core.widget.ParkingWidget2x2Provider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/parking_widget_info_2x2" />
+        </receiver>
+
+        <!--
+            ── ParkingWidget4x4Provider ────────────────────────────────────
+            4×4 대형 풀블리드 사진 + 구역 + 시간 위젯.
+        -->
+        <receiver
+            android:name=".core.widget.ParkingWidget4x4Provider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/parking_widget_info_4x4" />
+        </receiver>
+
+        <!-- Flutter 임베딩 버전 -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+
+    <!-- Android 11+ 쿼리 선언 (카메라 인텐트 가시성, 카카오톡 공유) -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+        <!-- 카카오톡 공유: isKakaoTalkSharingAvailable() 호출 시 필요 -->
+        <package android:name="com.kakao.talk" />
+    </queries>
+</manifest>

@@ -1,0 +1,48 @@
+name: snappark
+description: SnapPark V2 - 주차 위치 기록 앱
+publish_to: 'none'
+version: 2.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Local storage (Flutter ↔ Android Native 공유)
+  shared_preferences: ^2.3.2
+
+  # Data model serialization
+  json_annotation: ^4.9.0
+  freezed_annotation: ^2.4.4
+
+  # Camera & OCR
+  camera: ^0.11.0
+  google_mlkit_text_recognition: ^0.14.0
+  path_provider: ^2.1.4
+
+  # 로컬 푸시 알림 (Bluetooth 감지 후 알림 표시)
+  flutter_local_notifications: ^18.0.0
+
+  # 기압 센서 (주차 층수 추측용)
+  sensors_plus: ^6.1.1
+
+  # 카카오톡 공유 (FeedTemplate / TextTemplate)
+  kakao_flutter_sdk_share: ^1.9.0
+
+  # 앱 시스템 설정 페이지 열기 (카메라 권한 거부 → 설정 이동, 알림 설정 이동)
+  app_settings: ^5.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+  # Code generation
+  build_runner: ^2.4.13
+  freezed: ^2.5.7
+  json_serializable: ^6.8.0
+
+flutter:
+  uses-material-design: true

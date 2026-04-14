@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    4×4 위젯 레이아웃 — 대형 풀블리드 사진 + 구역 + 주차 시간
+    ┌───────────────────────────┐
+    │  [사          진]         │
+    │                           │
+    │                           │
+    │▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓│ ← 그라디언트 쉐도우 (더 높음)
+    │  B2                       │ ← 구역 텍스트 (34sp/w900)
+    │  2025년 4월 14일 오후 3:22 주차│ ← 주차 시간 (13sp)
+    └───────────────────────────┘
+    사진 없을 때: Toss Blue 배경 + 아이콘 + 안내 문구.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FF0064FF">
+
+    <!-- ── 배경 사진 (데이터 + 사진 있을 때) ──────────────────────────────── -->
+    <ImageView
+        android:id="@+id/iv_photo"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:visibility="gone" />
+
+    <!-- ── 빈 상태: 아이콘 + 안내 문구 ───────────────────────────────────── -->
+    <LinearLayout
+        android:id="@+id/ll_empty"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="📍"
+            android:textColor="#FFFFFFFF"
+            android:textSize="48sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:gravity="center"
+            android:text="탭하여 주차 기록"
+            android:textColor="#FFFFFFFF"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:alpha="0.7"
+            android:gravity="center"
+            android:text="주차 후 위젯을 탭하면 카메라가 열려요"
+            android:textColor="#FFFFFFFF"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <!-- ── 하단 쉐도우 오버레이 (데이터 + 사진 있을 때) ─────────────────── -->
+    <View
+        android:id="@+id/view_shadow"
+        android:layout_width="match_parent"
+        android:layout_height="140dp"
+        android:layout_gravity="bottom"
+        android:background="@drawable/widget_shadow_gradient"
+        android:visibility="gone" />
+
+    <!-- ── 데이터 상태: 구역 + 시간 (하단 고정) ──────────────────────────── -->
+    <LinearLayout
+        android:id="@+id/ll_data"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:orientation="vertical"
+        android:padding="18dp"
+        android:visibility="gone">
+
+        <!-- 구역 번호 (34sp / w900) -->
+        <TextView
+            android:id="@+id/tv_zone"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:fontFamily="sans-serif-black"
+            android:letterSpacing="-0.04"
+            android:shadowColor="#80000000"
+            android:shadowDx="0"
+            android:shadowDy="1"
+            android:shadowRadius="6"
+            android:singleLine="true"
+            android:textColor="#FFFFFFFF"
+            android:textSize="34sp" />
+
+        <!-- 주차 시간 (13sp / #8B95A1 → 위 흰색 반투명으로 대체) -->
+        <TextView
+            android:id="@+id/tv_timestamp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:alpha="0.75"
+            android:ellipsize="end"
+            android:letterSpacing="-0.01"
+            android:singleLine="true"
+            android:textColor="#FFFFFFFF"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+</FrameLayout>

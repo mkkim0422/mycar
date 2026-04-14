@@ -1,0 +1,30 @@
+﻿# Flutter/Dart 관련
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+
+# Android 관련
+.gradle/
+local.properties
+*.keystore
+*.jks
+*.ap_
+*.apk
+*.dex
+bin/
+gen/
+
+# IDE 관련
+.idea/
+.vscode/
+*.iml
+*.swp
+*.lock
+
+# 기타
+.DS_Store
+Thumbs.db
