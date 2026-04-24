@@ -17,14 +17,9 @@ class _NavItem {
 
 const _kItems = [
   _NavItem(
-    icon: Icons.home_outlined,
-    iconSelected: Icons.home_rounded,
-    label: '홈',
-  ),
-  _NavItem(
-    icon: Icons.widgets_outlined,
-    iconSelected: Icons.widgets_rounded,
-    label: '위젯',
+    icon: Icons.local_parking_outlined,
+    iconSelected: Icons.local_parking_rounded,
+    label: '내차위치',
   ),
   _NavItem(
     icon: Icons.settings_outlined,
@@ -33,14 +28,7 @@ const _kItems = [
   ),
 ];
 
-/// SnapPark 하단 내비게이션 바.
-///
-/// ## 스펙
-/// - 전체 높이: [AppTheme.navBarHeight] = 78dp (아이콘 + 레이블 + safe area 제외한 시각 영역)
-/// - 아이콘 크기: 28dp
-/// - 활성화 색상: [AppTheme.tossBlue] (#0064FF)
-/// - 비활성화 색상: [AppTheme.gray500] (#8B95A1)
-/// - 배경: 흰색, 상단에 0.5px 구분선
+/// SnapPark 하단 내비게이션 바 (2탭: 내차위치 / 설정).
 class SnapParkNavBar extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onTap;
@@ -62,19 +50,19 @@ class SnapParkNavBar extends StatelessWidget {
           top: BorderSide(color: AppTheme.gray200, width: 0.5),
         ),
       ),
-      // 78dp = 시각 영역 (safe area 위)
-      // safe area는 별도로 아래에 추가
       child: SizedBox(
         height: AppTheme.navBarHeight + bottomPadding,
         child: Padding(
           padding: EdgeInsets.only(bottom: bottomPadding),
           child: Row(
             children: List.generate(_kItems.length, (i) {
-              return Expanded(child: _NavTab(
-                item: _kItems[i],
-                isSelected: i == currentIndex,
-                onTap: () => onTap(i),
-              ));
+              return Expanded(
+                child: _NavTab(
+                  item: _kItems[i],
+                  isSelected: i == currentIndex,
+                  onTap: () => onTap(i),
+                ),
+              );
             }),
           ),
         ),
@@ -104,7 +92,6 @@ class _NavTab extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          // 아이콘: 활성/비활성 전환 + 크기 28dp
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 180),
             child: Icon(
@@ -115,7 +102,6 @@ class _NavTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          // 레이블
           Text(
             item.label,
             style: TextStyle(

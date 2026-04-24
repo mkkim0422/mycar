@@ -1,7 +1,7 @@
 name: snappark
 description: SnapPark V2 - 주차 위치 기록 앱
 publish_to: 'none'
-version: 2.0.0+1
+version: 1.0.0+1
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -34,6 +34,21 @@ dependencies:
   # 앱 시스템 설정 페이지 열기 (카메라 권한 거부 → 설정 이동, 알림 설정 이동)
   app_settings: ^5.0.0
 
+  # 런타임 권한 일괄 요청 (최초 실행 온보딩 페이지에서 카메라/위치/알림 한 번에)
+  permission_handler: ^11.3.1
+
+  # GPS 현재 위치 (촬영 시점 주차 좌표 저장)
+  geolocator: ^13.0.1
+
+  # 좌표 → 한국어 주소 역지오코딩 (Android Geocoder, 폴백 전용)
+  geocoding: ^3.0.0
+
+  # OpenStreetMap Nominatim 역지오코딩 HTTPS 호출 (한국 도로명주소 1순위, 키 불필요)
+  http: ^1.2.2
+
+  # 외부 URL/앱 실행 (네이버 지도 앱 또는 웹 버전 열기)
+  url_launcher: ^6.3.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -46,3 +61,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    - assets/images/

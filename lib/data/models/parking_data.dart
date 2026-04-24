@@ -20,6 +20,16 @@ class ParkingData with _$ParkingData {
 
     /// 저장 시각 (ISO 8601 문자열로 직렬화)
     required DateTime timestamp,
+
+    /// 주차 시점의 GPS 위도 (네이버 지도 연동용)
+    double? latitude,
+
+    /// 주차 시점의 GPS 경도 (네이버 지도 연동용)
+    double? longitude,
+
+    /// 역지오코딩된 한국어 주소 (홈 화면 보조 정보).
+    /// 오프라인/에뮬레이터 환경에서는 null 일 수 있다.
+    String? address,
   }) = _ParkingData;
 
   factory ParkingData.fromJson(Map<String, dynamic> json) =>

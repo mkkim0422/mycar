@@ -28,13 +28,20 @@ class NotificationService {
 
   final _plugin = FlutterLocalNotificationsPlugin();
   GlobalKey<NavigatorState>? _navigatorKey;
+  Future<void> Function()? _onCameraReturn;
 
   /// 서비스를 초기화한다.
   ///
   /// [navigatorKey]: 알림 탭 시 라우팅에 사용할 NavigatorKey.
   ///   앱 루트 [MaterialApp.navigatorKey]에 연결된 키를 전달해야 한다.
-  Future<void> initialize({required GlobalKey<NavigatorState> navigatorKey}) async {
+  /// [onCameraReturn]: 알림으로 카메라를 열었다가 돌아왔을 때 호출할 콜백.
+  ///   홈 데이터 갱신에 사용한다.
+  Future<void> initialize({
+    required GlobalKey<NavigatorState> navigatorKey,
+    Future<void> Function()? onCameraReturn,
+  }) async {
     _navigatorKey = navigatorKey;
+    _onCameraReturn = onCameraReturn;
 
     const androidSettings = AndroidInitializationSettings(
       // Android 8.0+ 적응형 아이콘 또는 단색 아이콘 리소스명 (확장자 제외)
@@ -88,8 +95,8 @@ class NotificationService {
 
     await _plugin.show(
       1001, // BluetoothDisconnectReceiver.NOTIFICATION_ID와 동일
-      '주차하셨나요?',
-      '위치를 기록해두세요! 탭하면 카메라가 열립니다.',
+      '🚗 주차하셨나요?',
+      '📸 위치를 기록해두세요!',
       details,
       payload: _kPayloadOpenCamera,
     );
@@ -120,9 +127,9 @@ class NotificationService {
 
     switch (payload) {
       case _kPayloadOpenCamera:
-        // 카메라 화면을 스택 위에 push
-        // import는 사용처에서 처리하고, 여기서는 named route 방식 사용
-        navigator.pushNamed('/camera');
+        navigator.pushNamed('/camera').then((_) {
+          _onCameraReturn?.call();
+        });
     }
   }
 }

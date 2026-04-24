@@ -32,6 +32,16 @@ mixin _$ParkingData {
   /// 저장 시각 (ISO 8601 문자열로 직렬화)
   DateTime get timestamp => throw _privateConstructorUsedError;
 
+  /// 주차 시점의 GPS 위도 (네이버 지도 연동용)
+  double? get latitude => throw _privateConstructorUsedError;
+
+  /// 주차 시점의 GPS 경도 (네이버 지도 연동용)
+  double? get longitude => throw _privateConstructorUsedError;
+
+  /// 역지오코딩된 한국어 주소 (홈 화면 보조 정보).
+  /// 오프라인/에뮬레이터 환경에서는 null 일 수 있다.
+  String? get address => throw _privateConstructorUsedError;
+
   /// Serializes this ParkingData to a JSON map.
   Map<String, dynamic> toJson() => throw _privateConstructorUsedError;
 
@@ -48,7 +58,14 @@ abstract class $ParkingDataCopyWith<$Res> {
           ParkingData value, $Res Function(ParkingData) then) =
       _$ParkingDataCopyWithImpl<$Res, ParkingData>;
   @useResult
-  $Res call({String floor, String zone, String? photoPath, DateTime timestamp});
+  $Res call(
+      {String floor,
+      String zone,
+      String? photoPath,
+      DateTime timestamp,
+      double? latitude,
+      double? longitude,
+      String? address});
 }
 
 /// @nodoc
@@ -70,6 +87,9 @@ class _$ParkingDataCopyWithImpl<$Res, $Val extends ParkingData>
     Object? zone = null,
     Object? photoPath = freezed,
     Object? timestamp = null,
+    Object? latitude = freezed,
+    Object? longitude = freezed,
+    Object? address = freezed,
   }) {
     return _then(_value.copyWith(
       floor: null == floor
@@ -88,6 +108,18 @@ class _$ParkingDataCopyWithImpl<$Res, $Val extends ParkingData>
           ? _value.timestamp
           : timestamp // ignore: cast_nullable_to_non_nullable
               as DateTime,
+      latitude: freezed == latitude
+          ? _value.latitude
+          : latitude // ignore: cast_nullable_to_non_nullable
+              as double?,
+      longitude: freezed == longitude
+          ? _value.longitude
+          : longitude // ignore: cast_nullable_to_non_nullable
+              as double?,
+      address: freezed == address
+          ? _value.address
+          : address // ignore: cast_nullable_to_non_nullable
+              as String?,
     ) as $Val);
   }
 }
@@ -100,7 +132,14 @@ abstract class _$$ParkingDataImplCopyWith<$Res>
       __$$ParkingDataImplCopyWithImpl<$Res>;
   @override
   @useResult
-  $Res call({String floor, String zone, String? photoPath, DateTime timestamp});
+  $Res call(
+      {String floor,
+      String zone,
+      String? photoPath,
+      DateTime timestamp,
+      double? latitude,
+      double? longitude,
+      String? address});
 }
 
 /// @nodoc
@@ -120,6 +159,9 @@ class __$$ParkingDataImplCopyWithImpl<$Res>
     Object? zone = null,
     Object? photoPath = freezed,
     Object? timestamp = null,
+    Object? latitude = freezed,
+    Object? longitude = freezed,
+    Object? address = freezed,
   }) {
     return _then(_$ParkingDataImpl(
       floor: null == floor
@@ -138,6 +180,18 @@ class __$$ParkingDataImplCopyWithImpl<$Res>
           ? _value.timestamp
           : timestamp // ignore: cast_nullable_to_non_nullable
               as DateTime,
+      latitude: freezed == latitude
+          ? _value.latitude
+          : latitude // ignore: cast_nullable_to_non_nullable
+              as double?,
+      longitude: freezed == longitude
+          ? _value.longitude
+          : longitude // ignore: cast_nullable_to_non_nullable
+              as double?,
+      address: freezed == address
+          ? _value.address
+          : address // ignore: cast_nullable_to_non_nullable
+              as String?,
     ));
   }
 }
@@ -149,7 +203,10 @@ class _$ParkingDataImpl implements _ParkingData {
       {required this.floor,
       required this.zone,
       this.photoPath,
-      required this.timestamp});
+      required this.timestamp,
+      this.latitude,
+      this.longitude,
+      this.address});
 
   factory _$ParkingDataImpl.fromJson(Map<String, dynamic> json) =>
       _$$ParkingDataImplFromJson(json);
@@ -170,9 +227,22 @@ class _$ParkingDataImpl implements _ParkingData {
   @override
   final DateTime timestamp;
 
+  /// 주차 시점의 GPS 위도 (네이버 지도 연동용)
+  @override
+  final double? latitude;
+
+  /// 주차 시점의 GPS 경도 (네이버 지도 연동용)
+  @override
+  final double? longitude;
+
+  /// 역지오코딩된 한국어 주소 (홈 화면 보조 정보).
+  /// 오프라인/에뮬레이터 환경에서는 null 일 수 있다.
+  @override
+  final String? address;
+
   @override
   String toString() {
-    return 'ParkingData(floor: $floor, zone: $zone, photoPath: $photoPath, timestamp: $timestamp)';
+    return 'ParkingData(floor: $floor, zone: $zone, photoPath: $photoPath, timestamp: $timestamp, latitude: $latitude, longitude: $longitude, address: $address)';
   }
 
   @override
@@ -185,13 +255,18 @@ class _$ParkingDataImpl implements _ParkingData {
             (identical(other.photoPath, photoPath) ||
                 other.photoPath == photoPath) &&
             (identical(other.timestamp, timestamp) ||
-                other.timestamp == timestamp));
+                other.timestamp == timestamp) &&
+            (identical(other.latitude, latitude) ||
+                other.latitude == latitude) &&
+            (identical(other.longitude, longitude) ||
+                other.longitude == longitude) &&
+            (identical(other.address, address) || other.address == address));
   }
 
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
-  int get hashCode =>
-      Object.hash(runtimeType, floor, zone, photoPath, timestamp);
+  int get hashCode => Object.hash(runtimeType, floor, zone, photoPath,
+      timestamp, latitude, longitude, address);
 
   /// Create a copy of ParkingData
   /// with the given fields replaced by the non-null parameter values.
@@ -214,7 +289,10 @@ abstract class _ParkingData implements ParkingData {
       {required final String floor,
       required final String zone,
       final String? photoPath,
-      required final DateTime timestamp}) = _$ParkingDataImpl;
+      required final DateTime timestamp,
+      final double? latitude,
+      final double? longitude,
+      final String? address}) = _$ParkingDataImpl;
 
   factory _ParkingData.fromJson(Map<String, dynamic> json) =
       _$ParkingDataImpl.fromJson;
@@ -234,6 +312,19 @@ abstract class _ParkingData implements ParkingData {
   /// 저장 시각 (ISO 8601 문자열로 직렬화)
   @override
   DateTime get timestamp;
+
+  /// 주차 시점의 GPS 위도 (네이버 지도 연동용)
+  @override
+  double? get latitude;
+
+  /// 주차 시점의 GPS 경도 (네이버 지도 연동용)
+  @override
+  double? get longitude;
+
+  /// 역지오코딩된 한국어 주소 (홈 화면 보조 정보).
+  /// 오프라인/에뮬레이터 환경에서는 null 일 수 있다.
+  @override
+  String? get address;
 
   /// Create a copy of ParkingData
   /// with the given fields replaced by the non-null parameter values.

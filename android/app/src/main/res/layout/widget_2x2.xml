@@ -41,6 +41,7 @@
             android:textSize="32sp" />
 
         <TextView
+            android:id="@+id/tv_empty_text"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
@@ -52,22 +53,27 @@
     </LinearLayout>
 
     <!-- ── 하단 쉐도우 오버레이 (데이터 + 사진 있을 때) ─────────────────── -->
-    <View
+    <!-- RemoteViews 기본 지원 뷰가 아닌 <View> 대신 ImageView 사용 (인플레이션 안정성) -->
+    <ImageView
         android:id="@+id/view_shadow"
         android:layout_width="match_parent"
         android:layout_height="90dp"
         android:layout_gravity="bottom"
         android:background="@drawable/widget_shadow_gradient"
+        android:importantForAccessibility="no"
+        android:scaleType="fitXY"
         android:visibility="gone" />
 
-    <!-- ── 데이터 상태: 구역 텍스트 (하단 고정) ──────────────────────────── -->
+    <!-- ── 데이터 상태: 구역 + 시간 (우측 하단 정렬) ────────────────────── -->
+    <!-- 사진 위 풀스크린 어두운 오버레이는 제거됨. 텍스트 가독성은 하단 gradient -->
+    <!-- shadow (view_shadow) + 개별 text shadow 만으로 확보한다. -->
     <LinearLayout
         android:id="@+id/ll_data"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom"
+        android:layout_height="match_parent"
+        android:gravity="bottom|end"
         android:orientation="vertical"
-        android:padding="14dp"
+        android:padding="12dp"
         android:visibility="gone">
 
         <TextView
@@ -75,15 +81,31 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:ellipsize="end"
-            android:fontFamily="sans-serif-black"
-            android:letterSpacing="-0.04"
+            android:letterSpacing="-0.02"
             android:shadowColor="#80000000"
             android:shadowDx="0"
             android:shadowDy="1"
-            android:shadowRadius="6"
+            android:shadowRadius="4"
             android:singleLine="true"
             android:textColor="#FFFFFFFF"
-            android:textSize="34sp" />
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tv_timestamp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:ellipsize="end"
+            android:letterSpacing="-0.01"
+            android:shadowColor="#80000000"
+            android:shadowDx="0"
+            android:shadowDy="1"
+            android:shadowRadius="4"
+            android:singleLine="true"
+            android:textColor="#FFFFFFFF"
+            android:textSize="13sp"
+            android:textStyle="bold" />
     </LinearLayout>
 
 </FrameLayout>

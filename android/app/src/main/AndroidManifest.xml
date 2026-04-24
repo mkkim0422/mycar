@@ -19,6 +19,19 @@
     <!-- ── 푸시 알림 (Android 13+ 런타임 권한) ──────────────────────────── -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- ── 포그라운드 서비스 (모션 감지용, BT 해제 후 가속도계 모니터링) ── -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SHORT_SERVICE" />
+
+    <!-- ── 위치 (주차 지점 GPS 좌표 저장 → 네이버 지도 연동용) ─────────── -->
+    <!-- foreground 전용: 촬영 시점에만 1회 조회. background 권한 불필요. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- ── 인터넷 (역지오코딩 HTTPS 호출: OpenStreetMap Nominatim) ──────── -->
+    <!-- release 빌드는 debug 매니페스트 자동 머지가 적용되지 않으므로 명시 필수. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- ── 하드웨어 기능 선언 ─────────────────────────────────────────────── -->
     <!-- 카메라: 핵심 기능 — 없으면 앱 설치 불가 -->
     <uses-feature
@@ -33,7 +46,10 @@
         android:label="내차어디"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:enableOnBackInvokedCallback="true">
+        android:enableOnBackInvokedCallback="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:usesCleartextTraffic="false">
 
         <!-- ── 메인 액티비티 ─────────────────────────────────────────────── -->
         <activity
@@ -69,8 +85,20 @@
             android:permission="android.permission.BLUETOOTH_CONNECT">
             <intent-filter>
                 <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
             </intent-filter>
         </receiver>
+
+        <!--
+            ── MotionDetectionService ─────────────────────────────────────
+            BT 연결 해제 후 가속도계 기반 하차 모션을 감지하는 경량 포그라운드 서비스.
+            shortService(Android 14+): 3분 제한, 빠르게 종료되면 알림 미노출.
+            BT 브로드캐스트에서 시작 → Android 12+ 백그라운드 제한 면제 대상.
+        -->
+        <service
+            android:name=".core.service.MotionDetectionService"
+            android:exported="false"
+            android:foregroundServiceType="shortService" />
 
         <!--
             ── ParkingWidget2x1Provider ────────────────────────────────────
@@ -103,6 +131,21 @@
         </receiver>
 
         <!--
+            ── ParkingWidget4x2Provider ────────────────────────────────────
+            4×2 가로형 위젯 — 풀블리드 사진 + 구역 + 주차시각 + 경과시간.
+        -->
+        <receiver
+            android:name=".core.widget.ParkingWidget4x2Provider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/parking_widget_info_4x2" />
+        </receiver>
+
+        <!--
             ── ParkingWidget4x4Provider ────────────────────────────────────
             4×4 대형 풀블리드 사진 + 구역 + 시간 위젯.
         -->
@@ -123,12 +166,20 @@
             android:value="2" />
     </application>
 
-    <!-- Android 11+ 쿼리 선언 (카메라 인텐트 가시성, 카카오톡 공유) -->
+    <!-- Android 11+ 쿼리 선언 (카메라 인텐트 가시성, 카카오톡 공유, 네이버 지도) -->
     <queries>
         <intent>
             <action android:name="android.media.action.IMAGE_CAPTURE" />
         </intent>
         <!-- 카카오톡 공유: isKakaoTalkSharingAvailable() 호출 시 필요 -->
         <package android:name="com.kakao.talk" />
+        <!-- 네이버 지도: nmap:// URL 스킴 canLaunchUrl 판별에 필요 -->
+        <package android:name="com.nhn.android.nmap" />
+        <!-- url_launcher 가 웹 폴백(https) 가시성을 확인하기 위한 뷰 인텐트 -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
     </queries>
 </manifest>

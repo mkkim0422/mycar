@@ -37,6 +37,17 @@ android {
         release {
             // 배포 시 별도 서명 설정 필요. 현재는 디버그 키로 flutter run --release 동작.
             signingConfig = signingConfigs.getByName("debug")
+
+            // 릴리스 빌드 디버그 비활성화
+            isDebuggable = false
+
+            // ── R8/ProGuard 난독화 + 코드 축소 ────────────────────────
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }
@@ -54,4 +65,22 @@ dependencies {
     // KoreanTextRecognizerOptions 네이티브 클래스가 필요하다.
     // 누락 시: java.lang.NoClassDefFoundError 로 촬영 직후 크래시.
     implementation("com.google.mlkit:text-recognition-korean:16.0.1")
+
+    // EXIF orientation 읽기 (위젯 사진 회전 복원용).
+    // BitmapFactory.decodeFile 은 EXIF 를 무시하므로 ExifInterface 로 회전값을 읽어
+    // Matrix 로 bitmap 을 돌려야 큰 사이즈 위젯에서 사진이 눕지 않는다.
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+
+    // ── AndroidX Security (At-Rest 암호화) ──────────────────────────────────
+    // AndroidKeyStore 로 보호되는 마스터 키를 이용해 SharedPreferences 를 AES-GCM
+    // 로 암호화한다. BluetoothDisconnectReceiver 가 앱 종료 상태에서도 BT MAC 을
+    // 복호화해야 하므로 Flutter 플러그인 대신 네이티브에서 직접 소유한다.
+    //
+    // 저장 대상:
+    //   - manual_car_id        : 수동 태깅된 차량 BT 기기 MAC
+    //   - manual_car_id_name   : 표시용 기기 이름
+    //
+    // 대상 파일: 내부 스토리지 /data/data/com.snappark/shared_prefs/SnapParkSecurePrefs.xml
+    //          (키·값 모두 AES-SIV/AES-GCM 암호화. 루팅된 디바이스에서도 평문 노출 없음)
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 }

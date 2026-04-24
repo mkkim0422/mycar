@@ -19,7 +19,10 @@ pluginManagement {
 
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
-    id("com.android.application") version "8.7.2" apply false
+    // url_launcher_android 최신 빌드가 androidx.browser:1.9.0 / core-ktx:1.17.0 을
+    // 끌어오는데, 이들은 AGP 8.9.1+ 를 요구한다. Gradle wrapper 8.14 는 이미
+    // 호환 범위이므로 AGP 만 8.9.1 로 상향.
+    id("com.android.application") version "8.9.1" apply false
     id("org.jetbrains.kotlin.android") version "2.2.20" apply false
 }
 

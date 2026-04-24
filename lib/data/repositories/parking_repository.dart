@@ -12,36 +12,41 @@ import '../models/parking_data.dart';
 /// 'FlutterSharedPreferences' 파일에 'flutter.<key>' 형태로 저장한다.
 /// Android Native에서는 동일 파일명 + 'flutter.parking_data' 키로 읽는다.
 /// → [SharedPrefsHelper.kt] 참고.
+/// 최신 주차 데이터 키 (네이티브 위젯이 읽는 키).
 const _kParkingDataKey = 'parking_data';
 
+/// 주차 히스토리 리스트 키 (JSON Array).
+const _kParkingHistoryKey = 'parking_history';
+
 /// 위젯 갱신 MethodChannel.
-/// MainActivity의 "refreshWidget" 핸들러가 등록된 모든 홈 위젯에
-/// APPWIDGET_UPDATE 브로드캐스트를 전송하여 실시간 동기화한다.
 const _widgetChannel = MethodChannel('com.snappark/widget');
 
 class ParkingRepository {
-  /// 주차 데이터를 JSON String으로 직렬화하여 덮어쓰기 저장.
-  /// 항상 단일 레코드만 유지한다 (최근 위치 1개).
-  /// 저장 완료 후 네이티브 홈 위젯을 즉시 갱신한다.
+  /// 주차 데이터를 저장한다.
+  /// - `parking_data`: 최신 1건 (홈 화면 + 네이티브 위젯용)
+  /// - `parking_history`: 전체 히스토리 리스트 (주차기록 보기용)
   Future<void> save(ParkingData data) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_kParkingDataKey, jsonEncode(data.toJson()));
+      final json = data.toJson();
+      await prefs.setString(_kParkingDataKey, jsonEncode(json));
+
+      // 히스토리에 추가 (최신이 앞에, 최대 100건 유지)
+      final history = await _loadHistory(prefs);
+      history.insert(0, json);
+      if (history.length > 100) history.removeRange(100, history.length);
+      await prefs.setString(_kParkingHistoryKey, jsonEncode(history));
     } catch (e) {
       debugPrint('[ParkingRepository] save() 실패: $e');
-      // 저장 실패 시 위젯 갱신도 의미 없으므로 조기 반환
       return;
     }
 
-    // 위젯 실시간 갱신 (best-effort: 채널 미등록·예외 시 무시)
     try {
       await _widgetChannel.invokeMethod<void>('refreshWidget');
-    } catch (_) {}
+    } catch (e) { debugPrint('[ParkingRepository] 위젯 갱신 실패: $e'); }
   }
 
-  /// 저장된 주차 데이터를 불러온다.
-  /// 저장된 데이터가 없으면 null 반환.
-  /// 데이터 오염(JSON 파싱 실패) 시에도 null을 반환하여 크래시를 방지한다.
+  /// 최신 주차 데이터를 반환한다 (홈 화면 표시용).
   Future<ParkingData?> get() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -50,26 +55,84 @@ class ParkingRepository {
       return ParkingData.fromJson(
           jsonDecode(jsonString) as Map<String, dynamic>);
     } catch (e) {
-      // 저장 데이터 오염(앱 업데이트·직접 수정 등) → 빈 상태로 안전 복귀
-      debugPrint('[ParkingRepository] get() 파싱 실패, 빈 상태 반환: $e');
+      debugPrint('[ParkingRepository] get() 파싱 실패: $e');
       return null;
     }
   }
 
-  /// 저장된 주차 데이터를 삭제한다.
-  /// 삭제 후 네이티브 홈 위젯도 빈 상태로 갱신한다.
+  /// 전체 주차 히스토리를 반환한다 (최신순).
+  Future<List<ParkingData>> getAll() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final history = await _loadHistory(prefs);
+      return history
+          .map((e) => ParkingData.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      debugPrint('[ParkingRepository] getAll() 실패: $e');
+      return [];
+    }
+  }
+
+  /// 특정 인덱스의 기록들을 삭제한다.
+  /// 삭제 후 최신 기록을 `parking_data`에 갱신한다.
+  Future<void> deleteAt(Set<int> indices) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final history = await _loadHistory(prefs);
+
+      // 인덱스 역순 삭제 (앞에서 삭제하면 뒤 인덱스가 밀림)
+      final sorted = indices.toList()..sort((a, b) => b.compareTo(a));
+      for (final i in sorted) {
+        if (i >= 0 && i < history.length) history.removeAt(i);
+      }
+
+      await prefs.setString(_kParkingHistoryKey, jsonEncode(history));
+
+      // 최신 기록 갱신
+      if (history.isNotEmpty) {
+        await prefs.setString(_kParkingDataKey, jsonEncode(history.first));
+      } else {
+        await prefs.remove(_kParkingDataKey);
+      }
+    } catch (e) {
+      debugPrint('[ParkingRepository] deleteAt() 실패: $e');
+      return;
+    }
+
+    try {
+      await _widgetChannel.invokeMethod<void>('refreshWidget');
+    } catch (e) { debugPrint('[ParkingRepository] 위젯 갱신 실패: $e'); }
+  }
+
+  /// 모든 기록을 삭제한다.
   Future<void> clear() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_kParkingDataKey);
+      await prefs.remove(_kParkingHistoryKey);
     } catch (e) {
       debugPrint('[ParkingRepository] clear() 실패: $e');
       return;
     }
 
-    // 위젯을 빈 상태로 갱신 (best-effort)
     try {
       await _widgetChannel.invokeMethod<void>('refreshWidget');
-    } catch (_) {}
+    } catch (e) { debugPrint('[ParkingRepository] 위젯 갱신 실패: $e'); }
+  }
+
+  /// SharedPreferences에서 히스토리 JSON 배열을 로드한다.
+  Future<List<dynamic>> _loadHistory(SharedPreferences prefs) async {
+    final raw = prefs.getString(_kParkingHistoryKey);
+    if (raw == null) {
+      // 히스토리가 없으면 기존 단일 레코드를 마이그레이션
+      final current = prefs.getString(_kParkingDataKey);
+      if (current != null) {
+        return [jsonDecode(current)];
+      }
+      return [];
+    }
+    final decoded = jsonDecode(raw);
+    return decoded is List ? decoded : [];
   }
 }

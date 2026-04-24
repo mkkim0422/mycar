@@ -1,13 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     2×1 위젯 메타데이터.
-    targetCellWidth/Height (API 31+) + minWidth/Height (API 21~30) 병행 선언.
-    updatePeriodMillis=1800000 → 30분(OS 최소 주기). 실시간 갱신은 MethodChannel로 처리.
+    previewLayout(API 31+) + previewImage(하위 폴백) 둘 다 지정해야
+    Samsung One UI 런처의 "홈 화면에 추가" 프리뷰에서 정상 렌더링된다.
+    (둘 다 없으면 프리뷰가 다크 플레이스홀더로 뜨고 "위젯을 추가할 수 없습니다" 에러)
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:initialLayout="@layout/widget_2x1"
     android:minHeight="40dp"
     android:minWidth="110dp"
+    android:previewImage="@mipmap/ic_launcher"
+    android:previewLayout="@layout/widget_2x1"
     android:resizeMode="horizontal"
     android:targetCellHeight="1"
     android:targetCellWidth="2"

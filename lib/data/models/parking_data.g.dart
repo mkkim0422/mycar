@@ -12,6 +12,9 @@ _$ParkingDataImpl _$$ParkingDataImplFromJson(Map<String, dynamic> json) =>
       zone: json['zone'] as String,
       photoPath: json['photoPath'] as String?,
       timestamp: DateTime.parse(json['timestamp'] as String),
+      latitude: (json['latitude'] as num?)?.toDouble(),
+      longitude: (json['longitude'] as num?)?.toDouble(),
+      address: json['address'] as String?,
     );
 
 Map<String, dynamic> _$$ParkingDataImplToJson(_$ParkingDataImpl instance) =>
@@ -20,4 +23,7 @@ Map<String, dynamic> _$$ParkingDataImplToJson(_$ParkingDataImpl instance) =>
       'zone': instance.zone,
       'photoPath': instance.photoPath,
       'timestamp': instance.timestamp.toIso8601String(),
+      'latitude': instance.latitude,
+      'longitude': instance.longitude,
+      'address': instance.address,
     };

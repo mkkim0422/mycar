@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    2×1 위젯 레이아웃 — 미니멀 뷰
+    2×1 위젯 레이아웃 — 미니멀 뷰 (Photo Only / Info Only / Photo+Info 모두 지원)
     ┌──────────────────────────┐
-    │  P   B2                  │  ← 파란 배경 + P 아이콘 + 구역 텍스트
+    │  [사진 배경 or 파란배경]  │
+    │  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  │ ← (사진일 때) 쉐도우
+    │  P   지하 2층 · 22구역   │
     └──────────────────────────┘
-    사진 없음. Toss Blue(#0064FF) 단색 배경에 흰 텍스트.
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
@@ -12,7 +13,29 @@
     android:layout_height="match_parent"
     android:background="#FF0064FF">
 
-    <!-- ── 빈 상태: 아이콘 + "기록 없음" ─────────────────────────────────── -->
+    <!-- ── 배경 사진 (Photo / Photo+Info 모드에서 노출) ────────────────── -->
+    <ImageView
+        android:id="@+id/iv_photo"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:visibility="gone" />
+
+    <!-- ── 하단 쉐도우 (Photo+Info 모드에서 텍스트 가독성 확보) ─────────── -->
+    <!-- RemoteViews 는 기본 <View> 태그를 지원하지 않는다 (공식 지원 뷰 목록 외).
+         Samsung One UI 에서는 레이아웃 인플레이션 실패로 "위젯을 추가할 수 없습니다"
+         에러가 발생하므로 ImageView 로 교체해 background 로 그라디언트를 유지한다. -->
+    <ImageView
+        android:id="@+id/view_shadow"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="bottom"
+        android:background="@drawable/widget_shadow_gradient"
+        android:importantForAccessibility="no"
+        android:scaleType="fitXY"
+        android:visibility="gone" />
+
+    <!-- ── 빈 상태 ──────────────────────────────────────────────────────── -->
     <LinearLayout
         android:id="@+id/ll_empty"
         android:layout_width="match_parent"
@@ -22,6 +45,7 @@
         android:paddingHorizontal="14dp">
 
         <TextView
+            android:id="@+id/tv_empty_text"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:ellipsize="end"
@@ -32,40 +56,48 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- ── 데이터 상태: P + 구역 텍스트 ─────────────────────────────────── -->
+    <!-- ── 데이터 상태: 구역 + 주차시간 (우측 하단 정렬) ────────────────── -->
+    <!-- 사진 위 풀스크린 어두운 오버레이는 제거됨. 텍스트 가독성은 하단 gradient -->
+    <!-- shadow (view_shadow) + 개별 text shadow 만으로 확보한다. -->
     <LinearLayout
         android:id="@+id/ll_data"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingHorizontal="14dp"
+        android:gravity="bottom|end"
+        android:orientation="vertical"
+        android:padding="10dp"
         android:visibility="gone">
 
-        <!-- 'P' 주차 마커 -->
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginEnd="10dp"
-            android:alpha="0.55"
-            android:fontFamily="sans-serif-black"
-            android:letterSpacing="-0.03"
-            android:text="P"
-            android:textColor="#FFFFFFFF"
-            android:textSize="18sp" />
-
-        <!-- 구역 번호 (34sp / w900 → sans-serif-black) -->
         <TextView
             android:id="@+id/tv_zone"
-            android:layout_width="0dp"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
             android:ellipsize="end"
-            android:fontFamily="sans-serif-black"
-            android:letterSpacing="-0.04"
+            android:letterSpacing="-0.02"
+            android:shadowColor="#80000000"
+            android:shadowDx="0"
+            android:shadowDy="1"
+            android:shadowRadius="4"
             android:singleLine="true"
             android:textColor="#FFFFFFFF"
-            android:textSize="28sp" />
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tv_timestamp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="1dp"
+            android:ellipsize="end"
+            android:letterSpacing="-0.01"
+            android:shadowColor="#80000000"
+            android:shadowDx="0"
+            android:shadowDy="1"
+            android:shadowRadius="4"
+            android:singleLine="true"
+            android:textColor="#FFFFFFFF"
+            android:textSize="13sp"
+            android:textStyle="bold" />
     </LinearLayout>
 
 </FrameLayout>

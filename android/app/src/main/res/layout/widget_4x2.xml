@@ -1,14 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    4×4 위젯 레이아웃 — 대형 풀블리드 사진 + 구역 + 주차 시간
-    ┌───────────────────────────┐
-    │  [사          진]         │
-    │                           │
-    │                           │
-    │▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓│ ← 그라디언트 쉐도우 (더 높음)
-    │  B2                       │ ← 구역 텍스트 (34sp/w900)
-    │  2025년 4월 14일 오후 3:22 주차│ ← 주차 시간 (13sp)
-    └───────────────────────────┘
+    4×2 위젯 레이아웃 — 가로로 긴 풀블리드 사진 + 구역 + 주차시각 + 경과시간
+    ┌─────────────────────────────────────────┐
+    │  [사                 진]                │
+    │▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓│ ← 하단 그라디언트 쉐도우
+    │  지하 2층 · 22구역                      │ ← 구역 (28sp/w900)
+    │  오후 3:22 주차 · 1시간 12분 경과        │ ← 주차시각 + 경과시간
+    └─────────────────────────────────────────┘
     사진 없을 때: Toss Blue 배경 + 아이콘 + 안내 문구.
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -31,53 +29,41 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:gravity="center"
-        android:orientation="vertical"
-        android:padding="24dp">
+        android:orientation="horizontal"
+        android:padding="16dp">
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginEnd="10dp"
             android:gravity="center"
             android:text="📍"
             android:textColor="#FFFFFFFF"
-            android:textSize="48sp" />
+            android:textSize="28sp" />
 
         <TextView
             android:id="@+id/tv_empty_text"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:gravity="center"
             android:text="탭하여 주차 기록"
             android:textColor="#FFFFFFFF"
-            android:textSize="18sp"
+            android:textSize="16sp"
             android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/tv_empty_sub"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:alpha="0.7"
-            android:gravity="center"
-            android:text="주차 후 위젯을 탭하면 카메라가 열려요"
-            android:textColor="#FFFFFFFF"
-            android:textSize="13sp" />
     </LinearLayout>
 
-    <!-- ── 하단 쉐도우 오버레이 (데이터 + 사진 있을 때) ─────────────────── -->
+    <!-- ── 하단 쉐도우 오버레이 ─────────────────────────────────────────── -->
     <!-- RemoteViews 기본 지원 뷰가 아닌 <View> 대신 ImageView 사용 (인플레이션 안정성) -->
     <ImageView
         android:id="@+id/view_shadow"
         android:layout_width="match_parent"
-        android:layout_height="140dp"
+        android:layout_height="110dp"
         android:layout_gravity="bottom"
         android:background="@drawable/widget_shadow_gradient"
         android:importantForAccessibility="no"
         android:scaleType="fitXY"
         android:visibility="gone" />
 
-    <!-- ── 데이터 상태: 구역 + 시간 + 주소 (우측 하단 정렬) ──────────────── -->
+    <!-- ── 데이터 상태: 구역 + 시각 + 주소 (우측 하단 정렬) ──────────────── -->
     <!-- 사진 위 풀스크린 어두운 오버레이는 제거됨. 텍스트 가독성은 하단 gradient -->
     <!-- shadow (view_shadow) + 개별 text shadow 만으로 확보한다. -->
     <LinearLayout

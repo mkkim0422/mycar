@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dart run *)",
+      "Bash(flutter analyze *)",
+      "Bash(dart -e ' *)",
+      "Bash(flutter pub *)",
+      "Read(//c/Users/minkk/AppData/Local/Pub/Cache/hosted/pub.dev/**)",
+      "Bash(flutter clean *)",
+      "Bash(ls c:/mycar/android/app/src/main/res/mipmap*)",
+      "Bash(flutter devices *)",
+      "Bash(adb devices *)",
+      "Bash(echo \"exit:$?\")",
+      "Bash(wc -l /c/mycar/lib/core/services/*.dart /c/mycar/lib/data/repositories/*.dart /c/mycar/lib/presentation/pages/*.dart /c/mycar/lib/main.dart /c/mycar/lib/core/theme/*.dart /c/mycar/lib/core/config/*.dart /c/mycar/lib/presentation/widgets/*.dart /c/mycar/lib/data/models/*.dart)",
+      "Bash(ls -lh /c/mycar/lib/**/*.dart)",
+      "Bash(awk '{print $5, $9}')",
+      "Bash(find /c/mycar/lib -name \"*.dart\" -type f -exec wc -l {} +)",
+      "Bash(awk '{print $1 \" lines: \" $2}')",
+      "Bash(sort -t: -k1,1nr)",
+      "Bash(find /c/mycar/android -name \"*.kt\" -type f -exec wc -l {} +)",
+      "Bash(python -c \"from PIL import Image; print\\('Pillow OK'\\)\")",
+      "Bash(ls -la c:/mycar/android/app/src/main/res/mipmap-*/ic_launcher.png)"
+    ]
+  }
+}

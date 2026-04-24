@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    2×2 위젯 메타데이터 — 정사각형 풀블리드 사진 + 경과시간.
+    4×2 위젯 메타데이터 — 가로형 풀블리드 사진 + 구역 + 시각 + 경과.
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:initialLayout="@layout/widget_2x2"
+    android:initialLayout="@layout/widget_4x2"
     android:minHeight="110dp"
-    android:minWidth="110dp"
+    android:minWidth="250dp"
     android:previewImage="@mipmap/ic_launcher"
-    android:previewLayout="@layout/widget_2x2"
-    android:resizeMode="none"
+    android:previewLayout="@layout/widget_4x2"
+    android:resizeMode="horizontal|vertical"
     android:targetCellHeight="2"
-    android:targetCellWidth="2"
+    android:targetCellWidth="4"
     android:updatePeriodMillis="1800000"
     android:widgetCategory="home_screen" />
