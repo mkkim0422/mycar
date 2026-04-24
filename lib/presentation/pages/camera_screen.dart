@@ -8,6 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../core/config/app_config.dart';
+import '../../core/services/gemini_ocr_service.dart';
 import '../../core/services/location_service.dart';
 import '../../data/models/parking_data.dart';
 import '../../data/repositories/parking_repository.dart';
@@ -197,7 +199,18 @@ class _CameraScreenState extends State<CameraScreen>
 
       if (!mounted) return;
 
-      // 4. 결과 바텀시트를 즉시 연다. 위치는 저장 시점(onConfirm)에 수거.
+      // 4. Gemini Vision OCR — 구역/층 자동 인식 (실패해도 수동 입력 폴백).
+      //    API 키가 설정돼 있을 때만 호출되며, GeminiOcrService 내부에서
+      //    5초 타임아웃·예외 흡수가 일어나므로 여기선 별도 방어가 필요 없다.
+      GeminiOcrResult? ocrHint;
+      if (AppConfig.isGeminiConfigured) {
+        _setStatus('AI가 구역 번호 인식 중...');
+        ocrHint = await GeminiOcrService.extractZone(savedPath);
+      }
+
+      if (!mounted) return;
+
+      // 5. 결과 바텀시트를 즉시 연다. 위치는 저장 시점(onConfirm)에 수거.
       //    사용자가 층/구역 입력하는 동안 백그라운드 GPS 조회가 진행되어
       //    실제 체감 대기 시간은 거의 0에 가까워진다.
       await _showResultSheet(
@@ -206,6 +219,7 @@ class _CameraScreenState extends State<CameraScreen>
           floor: '',
           photoPath: savedPath,
         ),
+        ocrHint: ocrHint,
       );
     } on CameraException catch (e) {
       _setStatus('촬영 오류: ${e.description}');
@@ -261,7 +275,10 @@ class _CameraScreenState extends State<CameraScreen>
 
   // ── Result bottom sheet ────────────────────────────────────────────────────
 
-  Future<void> _showResultSheet(CameraResult result) async {
+  Future<void> _showResultSheet(
+    CameraResult result, {
+    GeminiOcrResult? ocrHint,
+  }) async {
     // 바텀시트 결과로 "저장 완료된 CameraResult" 를 받는다. null 이면 재촬영/취소.
     //
     // ⚠️ 이전 구현은 onConfirm 내부에서 Navigator.pop() 을 두 번 연속 호출했는데,
@@ -280,18 +297,32 @@ class _CameraScreenState extends State<CameraScreen>
         // 촬영과 동시에 시작된 백그라운드 위치 Future 를 전달해,
         // 시트에서 역지오코딩된 주소를 실시간 표시한다.
         pendingLocation: _pendingLocation,
+        // Gemini Vision OCR 힌트. null 이면 (실패/타임아웃/키 미설정) 수동 입력.
+        ocrHint: ocrHint,
         onConfirm: (edited) async {
-          // 저장 시점에 백그라운드 위치 조회 결과를 수거한다.
-          // - 이미 완료됐으면 0초 대기 (대부분의 케이스)
-          // - 아직 진행 중이면 최대 8초 추가 대기 후 빈 스냅샷으로 저장 진행
-          //   (initState 사전 워밍업으로 사용자 입력 시간과 GPS 수렴이 겹쳐
-          //    실질 대기는 거의 0초. 8초 버퍼는 초고속 입력 사용자 대비 안전망.)
-          final loc = await _pendingLocation
-                  ?.timeout(
-                    const Duration(seconds: 8),
-                    onTimeout: () => LocationSnapshot.empty,
-                  ) ??
-              LocationSnapshot.empty;
+          // 저장 버튼 UX 원칙: 즉시 반응, 절대 블로킹 금지.
+          //
+          // 위치 조회가 미완료라도 **최대 1초만** 기다리고 진행한다. 이전엔
+          // 8초까지 대기했는데 사용자 관점에서는 "저장을 눌렀는데 8초간 화면이
+          // 먹통"으로 인지되어 앱이 크래시한 것처럼 보였다. 위치 없이 저장되면
+          // latitude/longitude 가 null 로 남지만, 주소는 사용자가 직접 편집했을
+          // 수 있으므로 edited.address 를 우선 사용한다.
+          //
+          // - 대부분의 경우: 사전 워밍업된 위치가 이미 완료 → 0초
+          // - 느린 경우: 1초 대기 후 empty 로 폴백 → 위치 없이 저장
+          // - 예외 발생: try/catch 로 흡수해 empty 로 진행 (크래시 차단)
+          var loc = LocationSnapshot.empty;
+          final pending = _pendingLocation;
+          if (pending != null) {
+            try {
+              loc = await pending.timeout(
+                const Duration(seconds: 1),
+                onTimeout: () => LocationSnapshot.empty,
+              );
+            } catch (_) {
+              // 위치 서비스가 예외를 던지는 경우에도 저장은 반드시 진행.
+            }
+          }
 
           final data = ParkingData(
             floor: edited.floor,
@@ -300,7 +331,10 @@ class _CameraScreenState extends State<CameraScreen>
             timestamp: DateTime.now(),
             latitude: loc.latitude,
             longitude: loc.longitude,
-            address: loc.address,
+            // 사용자가 수동으로 편집한 주소가 있으면 그것을 1순위로 사용.
+            // 편집 안 했으면 역지오코딩 결과를, 그것도 없으면 null 로 저장
+            // (나중에 홈 화면에서 주소만 업데이트하는 기능을 추가할 수 있다).
+            address: edited.address ?? loc.address,
           );
           await _parkingRepository.save(data);
 
@@ -586,11 +620,17 @@ class _ResultBottomSheet extends StatefulWidget {
   /// 시트가 열릴 때 await 하여 주소 라인에 바인딩한다.
   final Future<LocationSnapshot>? pendingLocation;
 
+  /// Gemini Vision API 가 뽑아낸 층/구역 힌트. null 이면 자동 인식을
+  /// 건너뛰고 사용자가 처음부터 수동 입력한다. non-null 이어도 사용자는
+  /// 언제든 수정 가능 — 어디까지나 기본값 채움용이다.
+  final GeminiOcrResult? ocrHint;
+
   const _ResultBottomSheet({
     required this.result,
     required this.onConfirm,
     required this.onRetry,
     required this.pendingLocation,
+    required this.ocrHint,
   });
 
   @override
@@ -621,7 +661,21 @@ class _ResultBottomSheetState extends State<_ResultBottomSheet> {
   @override
   void initState() {
     super.initState();
+    _applyOcrHint();
     _awaitAddress();
+  }
+
+  /// Gemini Vision 이 반환한 힌트를 입력 필드 초기값으로 채운다.
+  ///
+  /// 힌트가 null 이거나 빈 문자열이면 해당 필드는 그대로 비워둔 채 사용자
+  /// 수동 입력을 기다린다. 지상/지하 토글은 힌트가 있을 때만 덮어써,
+  /// 힌트가 아예 없을 때는 기존 기본값(지하) 을 유지한다.
+  void _applyOcrHint() {
+    final hint = widget.ocrHint;
+    if (hint == null) return;
+    if (hint.floor.isNotEmpty) _floorCtrl.text = hint.floor;
+    if (hint.zone.isNotEmpty) _zoneCtrl.text = hint.zone;
+    _isBasement = hint.isBasement;
   }
 
   /// 촬영 시점에 시작된 GPS/역지오코딩 결과를 기다려 UI 에 반영한다.

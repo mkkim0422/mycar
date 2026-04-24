@@ -28,3 +28,6 @@ gen/
 # 기타
 .DS_Store
 Thumbs.db
+
+# API 키 등 비밀값 (Kakao / Gemini)
+lib/core/config/app_config.dart
