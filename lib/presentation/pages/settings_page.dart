@@ -18,7 +18,6 @@ const _kBtAutoEnabledKey = 'bt_auto_enabled';
 /// 수동 태깅된 차량 BT MAC 은 `shared_preferences` 평문 대신
 /// AndroidKeyStore 마스터 키로 암호화된 네이티브 저장소
 /// ([SecurePrefsHelper]) 로 이동했다. Dart 에서는 이 채널을 통해서만 접근한다.
-/// FLAG_SECURE 관리는 ShellScreen 으로 일원화됨 (탭 상태와 바인딩).
 const _nativeChannel = MethodChannel('com.snappark/widget');
 
 /// 설정 화면.
@@ -43,10 +42,6 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
-    // FLAG_SECURE 는 ShellScreen 이 현재 탭 인덱스에 따라 관리한다.
-    // (IndexedStack 은 비활성 탭도 State 를 dispose 하지 않으므로, 이 페이지에서
-    //  initState/dispose 로 토글하면 settings 탭이 한 번이라도 그려진 뒤에는
-    //  내차위치 탭에서도 SECURE 가 계속 남아 화면 캡처가 차단되는 버그 발생)
     _loadTaggedCar();
     _loadBtAutoEnabled();
   }
@@ -63,6 +58,23 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() => _btAutoEnabled = enabled);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kBtAutoEnabledKey, enabled);
+  }
+
+  /// [DEV] BT 해제 이벤트를 강제 시뮬레이션해 정상 알림 파이프라인을 검증한다.
+  ///
+  /// 네이티브 `testMotionTrigger` 는 OS 브로드캐스트 단계만 우회해
+  /// [MotionDetectionService] 를 그대로 시작한다 — 가속도계 감지 → 주차 알림
+  /// 흐름은 실제 BT 해제와 1:1 동일.
+  Future<void> _triggerBtDisconnectTest() async {
+    try {
+      await _nativeChannel.invokeMethod<void>('testMotionTrigger');
+    } catch (e) {
+      if (!mounted) return;
+      _showSnackBar('테스트 실행 실패: $e');
+      return;
+    }
+    if (!mounted) return;
+    _showSnackBar('BT 해제 시뮬레이션 시작 — 폰을 움직이면 알림이 뜹니다');
   }
 
   /// 저장된 태깅 기기 MAC/이름을 네이티브 암호화 저장소에서 로드한다.
@@ -308,6 +320,60 @@ class _SettingsPageState extends State<SettingsPage> {
                   ? '이미 페어링된 기기 중 내 차를 선택하면 해당 기기의 연결 해제만 감지해 알림을 보냅니다. (신규 연결 시도 없음)'
                   : 'MAC ${_taggedCar!.address} · 태그된 기기가 해제되면 자동 필터를 건너뛰고 즉시 알림합니다.',
               style: const TextStyle(
+                fontSize: 12,
+                color: AppTheme.gray500,
+                height: 1.45,
+                letterSpacing: -0.1,
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 28),
+
+          // ── 섹션 99: 개발용 (배포 시 제거) ─────────────────────────────
+          // BT 해제 → 모션 감지 → 주차 알림 파이프라인을 차량 없이 검증한다.
+          // 정상 흐름과 동일하게 MotionDetectionService 를 시작 — OS 브로드캐스트
+          // 단계만 우회한다. 배포 빌드에서는 이 섹션과 _triggerBtDisconnectTest,
+          // 그리고 MainActivity 의 'testMotionTrigger' 핸들러를 함께 제거할 것.
+          _SectionHeader(label: '개발용 (배포 시 제거)'),
+          _SettingsCard(
+            children: [
+              InkWell(
+                onTap: _triggerBtDisconnectTest,
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: AppTheme.spacingCard, vertical: 16),
+                  child: Row(
+                    children: [
+                      Icon(Icons.bug_report_rounded,
+                          size: 22, color: Colors.red),
+                      SizedBox(width: 14),
+                      Expanded(
+                        child: Text(
+                          'BT 해제 테스트 (개발용)',
+                          style: TextStyle(
+                            fontSize: AppTheme.fontBody1,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.red,
+                            letterSpacing: -0.2,
+                          ),
+                        ),
+                      ),
+                      Icon(Icons.chevron_right_rounded,
+                          size: 20, color: Colors.red),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 4),
+            child: Text(
+              '실제 BT 해제와 동일한 흐름으로 모션 감지 서비스를 시작합니다. '
+              '폰을 움직이거나 약 2분 후 주차 알림이 발송됩니다.',
+              style: TextStyle(
                 fontSize: 12,
                 color: AppTheme.gray500,
                 height: 1.45,

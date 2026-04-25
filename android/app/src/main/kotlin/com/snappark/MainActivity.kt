@@ -12,7 +12,6 @@ import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.RemoteViews
-import android.view.WindowManager
 import androidx.core.content.ContextCompat
 import com.snappark.core.data.SecurePrefsHelper
 import com.snappark.core.data.SharedPrefsHelper
@@ -131,21 +130,6 @@ class MainActivity : FlutterActivity() {
                     }
                     "secureClearManualCar" -> {
                         SecurePrefsHelper.clearManualCar(this@MainActivity)
-                        result.success(null)
-                    }
-
-                    // ── FLAG_SECURE 토글 (최근앱 썸네일·스크린샷·외부 녹화 차단) ─
-                    //    민감 데이터(MAC)가 노출되는 설정 페이지에서만 on, 나머지는 off.
-                    //    파킹 사진 화면은 사용자가 스크린샷·공유를 기대하므로 절대 on 금지.
-                    "setWindowSecure" -> {
-                        val enabled = call.argument<Boolean>("enabled") ?: false
-                        runOnUiThread {
-                            if (enabled) {
-                                window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-                            } else {
-                                window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-                            }
-                        }
                         result.success(null)
                     }
 

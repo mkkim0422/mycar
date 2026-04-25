@@ -290,23 +290,14 @@ class _CameraScreenState extends State<CameraScreen>
       isScrollControlled: true,
       builder: (sheetCtx) => _ResultBottomSheet(
         result: result,
-        // 촬영과 동시에 시작된 백그라운드 위치 Future 를 전달해,
-        // 시트에서 역지오코딩된 주소를 실시간 표시한다.
-        pendingLocation: _pendingLocation,
         // ML Kit OCR 힌트. floor/zone 이 빈 문자열이면 수동 입력 유도.
         ocrHint: ocrHint,
         onConfirm: (edited) async {
           // 저장 버튼 UX 원칙: 즉시 반응, 절대 블로킹 금지.
           //
-          // 위치 조회가 미완료라도 **최대 1초만** 기다리고 진행한다. 이전엔
-          // 8초까지 대기했는데 사용자 관점에서는 "저장을 눌렀는데 8초간 화면이
-          // 먹통"으로 인지되어 앱이 크래시한 것처럼 보였다. 위치 없이 저장되면
-          // latitude/longitude 가 null 로 남지만, 주소는 사용자가 직접 편집했을
-          // 수 있으므로 edited.address 를 우선 사용한다.
-          //
-          // - 대부분의 경우: 사전 워밍업된 위치가 이미 완료 → 0초
-          // - 느린 경우: 1초 대기 후 empty 로 폴백 → 위치 없이 저장
-          // - 예외 발생: try/catch 로 흡수해 empty 로 진행 (크래시 차단)
+          // 위치 조회가 미완료라도 **최대 1초만** 기다리고 진행한다. 좌표만
+          // 수거해 ParkingData 에 담고, 주소는 항상 null 로 저장한다 — 홈 화면
+          // 진입 시점에 좌표로 역지오코딩하여 표시한다 (검색 결과 늦지연 허용).
           var loc = LocationSnapshot.empty;
           final pending = _pendingLocation;
           if (pending != null) {
@@ -327,10 +318,9 @@ class _CameraScreenState extends State<CameraScreen>
             timestamp: DateTime.now(),
             latitude: loc.latitude,
             longitude: loc.longitude,
-            // 사용자가 수동으로 편집한 주소가 있으면 그것을 1순위로 사용.
-            // 편집 안 했으면 역지오코딩 결과를, 그것도 없으면 null 로 저장
-            // (나중에 홈 화면에서 주소만 업데이트하는 기능을 추가할 수 있다).
-            address: edited.address ?? loc.address,
+            // 주소 UI 가 시트에서 제거됐으므로 항상 null 로 저장. 좌표가 있으면
+            // 홈 화면이 표시 시점에 Kakao Local API 로 역지오코딩하여 띄운다.
+            address: null,
           );
           await _parkingRepository.save(data);
 
@@ -612,10 +602,6 @@ class _ResultBottomSheet extends StatefulWidget {
   final ValueChanged<CameraResult> onConfirm;
   final VoidCallback onRetry;
 
-  /// 촬영과 동시에 시작된 백그라운드 위치 조회 Future.
-  /// 시트가 열릴 때 await 하여 주소 라인에 바인딩한다.
-  final Future<LocationSnapshot>? pendingLocation;
-
   /// ML Kit OCR 가 뽑아낸 층/구역 힌트. null 또는 빈 문자열이면 자동 인식을
   /// 건너뛰고 사용자가 처음부터 수동 입력한다. non-null 이어도 사용자는
   /// 언제든 수정 가능 — 어디까지나 기본값 채움용이다.
@@ -625,7 +611,6 @@ class _ResultBottomSheet extends StatefulWidget {
     required this.result,
     required this.onConfirm,
     required this.onRetry,
-    required this.pendingLocation,
     required this.ocrHint,
   });
 
@@ -635,30 +620,18 @@ class _ResultBottomSheet extends StatefulWidget {
 
 class _ResultBottomSheetState extends State<_ResultBottomSheet> {
   // 층·구역은 완전한 수동 입력. 지상/지하는 토글.
+  // 주소 입력은 시트에서 제거됐다. 좌표는 백그라운드로 저장하고, 주소는
+  // 홈 화면 진입 시점에 좌표로 늦게 역지오코딩되어 표시된다.
   final _floorCtrl = TextEditingController();
   final _zoneCtrl = TextEditingController();
 
-  /// 주소 입력 컨트롤러 — 자동 역지오코딩 결과를 초기값으로 받지만 사용자가
-  /// 자유롭게 수정 가능하다. Nominatim/OSM 이 이면도로(예: 사성로75번길)를
-  /// 등록하지 않은 케이스에서 "광일로" 같은 인접 메인 도로가 잘못 뜰 수 있어
-  /// 수동 보정 UI 가 필수적이다.
-  final _addressCtrl = TextEditingController();
-
-  /// 사용자가 주소를 직접 편집했는지 추적. 편집 이후에는 비동기로 뒤늦게
-  /// 도착하는 자동 주소로 덮어쓰지 않는다.
-  bool _addressEditedByUser = false;
-
   /// 지상/지하 선택 상태. 기본은 "지하" (대부분의 주차장이 지하).
   bool _isBasement = true;
-
-  /// 주소 조회 상태 — 초기 "조회 중..." 표시용.
-  bool _addressLoading = true;
 
   @override
   void initState() {
     super.initState();
     _applyOcrHint();
-    _awaitAddress();
   }
 
   /// ML Kit OCR 가 반환한 힌트를 입력 필드 초기값으로 채운다.
@@ -674,36 +647,10 @@ class _ResultBottomSheetState extends State<_ResultBottomSheet> {
     _isBasement = hint.isBasement;
   }
 
-  /// 촬영 시점에 시작된 GPS/역지오코딩 결과를 기다려 UI 에 반영한다.
-  /// 카메라 화면 initState 에서 사전 워밍업을 시작하므로 대부분 시트 열림
-  /// 시점에 이미 완료되어 즉시 주소가 표시된다. 예외 대비 7초 안전망.
-  Future<void> _awaitAddress() async {
-    final future = widget.pendingLocation;
-    if (future == null) {
-      if (mounted) setState(() => _addressLoading = false);
-      return;
-    }
-    try {
-      final loc = await future.timeout(const Duration(seconds: 7));
-      if (!mounted) return;
-      setState(() {
-        // 사용자가 이미 편집했다면 자동 주소로 덮어쓰지 않는다.
-        if (!_addressEditedByUser && (loc.address?.isNotEmpty ?? false)) {
-          _addressCtrl.text = loc.address!;
-        }
-        _addressLoading = false;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _addressLoading = false);
-    }
-  }
-
   @override
   void dispose() {
     _floorCtrl.dispose();
     _zoneCtrl.dispose();
-    _addressCtrl.dispose();
     super.dispose();
   }
 
@@ -720,16 +667,14 @@ class _ResultBottomSheetState extends State<_ResultBottomSheet> {
   }
 
   /// 저장 시 입력값으로 CameraResult 를 구성.
-  /// 좌표는 onConfirm 콜백 측에서 pending location 으로부터 수거하지만,
-  /// **주소는 사용자가 편집 가능**하므로 여기서 직접 넘긴다.
+  /// 좌표·주소는 onConfirm 콜백 측에서 처리한다. 주소 UI 가 시트에서 제거됐으므로
+  /// 여기선 floor/zone/photoPath 만 채운다.
   void _handleConfirm() {
     final typedZone = _zoneCtrl.text.trim();
-    final typedAddress = _addressCtrl.text.trim();
     widget.onConfirm(CameraResult(
       floor: _composedFloor(),
       zone: typedZone.isEmpty ? '-' : typedZone,
       photoPath: widget.result.photoPath,
-      address: typedAddress.isEmpty ? null : typedAddress,
     ));
   }
 
@@ -792,18 +737,6 @@ class _ResultBottomSheetState extends State<_ResultBottomSheet> {
                     ),
                   ),
                 ),
-
-              const SizedBox(height: 16),
-
-              // ── 현재 위치 주소 (역지오코딩 결과, 편집 가능) ────────────────
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: _AddressField(
-                  controller: _addressCtrl,
-                  loading: _addressLoading,
-                  onUserEdit: () => _addressEditedByUser = true,
-                ),
-              ),
 
               const SizedBox(height: 16),
 
@@ -1122,126 +1055,6 @@ class _CornerFramePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-// ── 주소 편집 필드 ──────────────────────────────────────────────────────────
-
-/// 촬영 위치의 역지오코딩 주소를 보여주면서 **자유 편집 가능**한 입력 컴포넌트.
-///
-/// ## 왜 편집 가능해야 하는가
-/// - OSM/Nominatim 은 한국 이면도로(예: "사성로75번길") 가 데이터에 없으면
-///   가장 가까운 등록 도로(예: "광일로") 를 반환한다. 좌표가 정확해도 주소가
-///   틀릴 수 있는 근본 한계다.
-/// - 지하주차장처럼 GPS 가 닿지 않는 환경에서는 WiFi 기반 위치로 100m+ 오차가
-///   발생해 인접 도로로 잘못 매칭되는 경우도 있다.
-/// - 사용자가 직접 수정할 수 있어야 어떤 지오코더를 써도 "제대로 된 주소"를
-///   보장할 수 있다.
-class _AddressField extends StatefulWidget {
-  final TextEditingController controller;
-  final bool loading;
-  final VoidCallback onUserEdit;
-
-  const _AddressField({
-    required this.controller,
-    required this.loading,
-    required this.onUserEdit,
-  });
-
-  @override
-  State<_AddressField> createState() => _AddressFieldState();
-}
-
-class _AddressFieldState extends State<_AddressField> {
-  @override
-  void initState() {
-    super.initState();
-    // controller.text 변화에 따라 지우기 버튼 노출 여부를 갱신.
-    widget.controller.addListener(_onCtrlChanged);
-  }
-
-  @override
-  void dispose() {
-    widget.controller.removeListener(_onCtrlChanged);
-    super.dispose();
-  }
-
-  void _onCtrlChanged() {
-    if (mounted) setState(() {});
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final controller = widget.controller;
-    final loading = widget.loading;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF7F9FC),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E8EB), width: 0.5),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Icon(
-            loading
-                ? Icons.location_searching_rounded
-                : Icons.place_rounded,
-            size: 16,
-            color: loading
-                ? const Color(0xFF8B95A1)
-                : const Color(0xFF0064FF),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              onChanged: (_) => widget.onUserEdit(),
-              maxLines: 1,
-              textInputAction: TextInputAction.next,
-              scrollPadding: const EdgeInsets.only(bottom: 120),
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF333D4B),
-                height: 1.4,
-                letterSpacing: -0.2,
-              ),
-              decoration: InputDecoration(
-                hintText: loading ? '위치 확인 중...' : '주소를 입력하세요',
-                hintStyle: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: Color(0xFF8B95A1),
-                ),
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-              ),
-            ),
-          ),
-          // 주소 지우기 버튼 — 자동 매칭이 완전히 틀렸을 때 빠르게 비우고 새로 입력.
-          if (controller.text.isNotEmpty)
-            GestureDetector(
-              onTap: () {
-                controller.clear();
-                widget.onUserEdit();
-              },
-              child: const Padding(
-                padding: EdgeInsets.all(4),
-                child: Icon(
-                  Icons.close_rounded,
-                  size: 16,
-                  color: Color(0xFF8B95A1),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
 }
 
 // ── Isolate 파일 복사 (Top-level 함수 필수) ──────────────────────────────────

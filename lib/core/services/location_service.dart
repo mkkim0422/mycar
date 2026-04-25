@@ -201,6 +201,13 @@ class LocationService {
     return !age.isNegative && age < _cachedFixMaxAge;
   }
 
+  /// 좌표 → 한국어 주소. **외부 호출용 공개 진입점**.
+  ///
+  /// 홈 화면이 이미 저장된 좌표만 갖고 주소를 뒤늦게 조회할 때 사용한다.
+  /// 내부 로직은 [_reverseGeocode] 와 동일 (Kakao → Android 순).
+  static Future<String?> reverseGeocode(double lat, double lng) =>
+      _reverseGeocode(lat, lng);
+
   /// 좌표 → 한국어 주소. 실패 시 null.
   ///
   /// ## 우선순위

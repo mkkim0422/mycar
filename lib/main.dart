@@ -110,14 +110,10 @@ class _ShellScreenState extends State<ShellScreen> {
     super.initState();
     _ensureNotificationService();
     _checkWidgetSetup();
-    // 내차위치(index 0) 로 시작하므로 FLAG_SECURE 는 반드시 OFF 상태로 초기화.
-    // (이전 세션/핫리로드에서 settings 탭이 켰던 잔재를 확실히 제거)
-    _setWindowSecure(false);
 
     _goHomeCallback = () {
       if (mounted) {
         setState(() => _currentIndex = 0);
-        _setWindowSecure(false);
         _homeKey.currentState?.reload();
       }
     };
@@ -125,25 +121,9 @@ class _ShellScreenState extends State<ShellScreen> {
     _reloadHomeCallback = () async {
       if (mounted) {
         setState(() => _currentIndex = 0);
-        _setWindowSecure(false);
         await _homeKey.currentState?.reload();
       }
     };
-  }
-
-  /// 화면 캡처 차단 플래그를 네이티브 윈도우에 적용한다.
-  ///
-  /// IndexedStack 은 비활성 탭을 dispose 하지 않으므로, settings 탭이 자체
-  /// initState/dispose 에서 토글하면 다른 탭으로 전환해도 플래그가 풀리지 않는
-  /// 버그가 발생한다. 탭 전환의 유일한 책임 지점인 ShellScreen 이 관리한다.
-  Future<void> _setWindowSecure(bool enabled) async {
-    try {
-      await _widgetChannel.invokeMethod<void>(
-        'setWindowSecure', {'enabled': enabled},
-      );
-    } catch (_) {
-      // 일시적 채널 오류는 무시 — 플래그 실패는 앱 기능에 치명적이지 않다.
-    }
   }
 
   Future<void> _ensureNotificationService() async {
@@ -212,9 +192,6 @@ class _ShellScreenState extends State<ShellScreen> {
         currentIndex: _currentIndex,
         onTap: (i) {
           setState(() => _currentIndex = i);
-          // 설정 탭(1)에서만 SECURE 플래그 ON — 태깅된 차량 MAC 등 민감정보
-          // 노출 방지. 내차위치 탭(0)에선 OFF 라 사용자가 사진/위치를 캡처·공유할 수 있다.
-          _setWindowSecure(i == 1);
         },
       ),
     );

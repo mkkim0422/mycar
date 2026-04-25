@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/config/app_config.dart';
 import '../../core/services/kakao_share_service.dart';
+import '../../core/services/location_service.dart';
 import '../../core/services/map_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/parking_data.dart';
@@ -52,6 +53,14 @@ class HomePageState extends State<HomePage> {
   ParkingData? _data;
   bool _loading = true;
 
+  /// data.address 가 비어있을 때 좌표로 역지오코딩한 결과.
+  /// 카메라 시트에서 주소 UI 가 제거됐으므로 항상 null 로 저장된다 → 홈에 진입할
+  /// 때 좌표를 이용해 늦게 조회한다. 결과는 화면 표시용으로만 사용 (DB 저장 X).
+  String? _resolvedAddress;
+
+  /// 좌표 → 주소 비동기 조회가 진행 중인지.
+  bool _resolvingAddress = false;
+
   @override
   void initState() {
     super.initState();
@@ -60,7 +69,35 @@ class HomePageState extends State<HomePage> {
 
   Future<void> _load() async {
     final data = await _repo.get();
-    if (mounted) setState(() { _data = data; _loading = false; });
+    if (!mounted) return;
+    setState(() {
+      _data = data;
+      _loading = false;
+      // 새로고침 시점에 이전 fallback 결과를 초기화해야 한다 — 다른 주차 기록이
+      // 로드되면 거기에 맞춰 다시 조회해야 하기 때문.
+      _resolvedAddress = null;
+      _resolvingAddress = false;
+    });
+
+    // data.address 가 비어있고 좌표는 있으면 백그라운드로 늦게 역지오코딩.
+    if (data != null &&
+        (data.address == null || data.address!.isEmpty) &&
+        data.latitude != null &&
+        data.longitude != null) {
+      _resolveAddressInBackground(data.latitude!, data.longitude!);
+    }
+  }
+
+  /// 좌표를 Kakao Local API 로 역지오코딩하여 [_resolvedAddress] 에 채운다.
+  /// 실패해도 앱은 정상 동작 — UI 는 "위치 정보 없음" 상태로 표시된다.
+  Future<void> _resolveAddressInBackground(double lat, double lng) async {
+    if (mounted) setState(() => _resolvingAddress = true);
+    final addr = await LocationService.reverseGeocode(lat, lng);
+    if (!mounted) return;
+    setState(() {
+      _resolvingAddress = false;
+      _resolvedAddress = addr; // null 이면 실패 — UI 가 "위치 정보 없음" 으로 처리
+    });
   }
 
   /// 카메라에서 돌아온 후 데이터 새로고침을 위해 외부에서 호출 가능.
@@ -68,6 +105,16 @@ class HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    // 화면에 띄울 주소 — 저장된 data.address 를 우선, 없으면 늦게 조회한
+    // _resolvedAddress 사용. 둘 다 없을 수 있고 그 경우 _DataBody 가 상태에
+    // 따라 "위치 확인 중..." / "위치 정보 없음" 을 표시한다.
+    String? displayAddress;
+    if (_data?.address != null && _data!.address!.isNotEmpty) {
+      displayAddress = _data!.address;
+    } else if (_resolvedAddress != null && _resolvedAddress!.isNotEmpty) {
+      displayAddress = _resolvedAddress;
+    }
+
     return Scaffold(
       backgroundColor: AppTheme.gray100,
       appBar: _buildAppBar(),
@@ -77,6 +124,8 @@ class HomePageState extends State<HomePage> {
               ? _EmptyBody(onRegisterTap: widget.onRegisterTap)
               : _DataBody(
                 data: _data!,
+                displayAddress: displayAddress,
+                addressLoading: _resolvingAddress,
                 onRegisterTap: widget.onRegisterTap,
                 // 카카오 앱키가 플레이스홀더 상태면 공유 버튼 자체를 감춰
                 // "wrong appKey … format" 에러가 뜨지 않게 한다.
@@ -104,11 +153,21 @@ class HomePageState extends State<HomePage> {
 
 class _DataBody extends StatelessWidget {
   final ParkingData data;
+
+  /// 화면에 표시할 주소. data.address 또는 늦게 조회한 결과 중 하나가 우선 사용된다.
+  /// null 이면 "위치 정보 없음" (또는 [addressLoading] true 면 "위치 확인 중...").
+  final String? displayAddress;
+
+  /// 좌표 → 주소 비동기 조회가 진행 중인지. true 면 주소 라인이 로딩 상태로 표시된다.
+  final bool addressLoading;
+
   final VoidCallback onRegisterTap;
   final VoidCallback? onShareTap;
 
   const _DataBody({
     required this.data,
+    required this.displayAddress,
+    required this.addressLoading,
     required this.onRegisterTap,
     this.onShareTap,
   });
@@ -176,43 +235,19 @@ class _DataBody extends StatelessWidget {
 
             const SizedBox(height: 12),
 
-            // ── 주차 지점 주소 (역지오코딩 결과) ─────────────────────────
-            //    카메라 결과 화면과 동일한 스타일로 표시한다.
-            if (data.address != null && data.address!.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF7F9FC),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                        color: const Color(0xFFE5E8EB), width: 0.5),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.place_rounded,
-                          size: 16, color: AppTheme.tossBlue),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          data.address!,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF333D4B),
-                            height: 1.4,
-                            letterSpacing: -0.2,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+            // ── 주차 지점 주소 (저장된 값 또는 좌표→Kakao 늦은 조회) ─────
+            //    저장 시점엔 address 가 항상 null 이라 좌표가 있으면 홈 진입
+            //    시점에 백그라운드로 역지오코딩하여 채워진다. 표시 상태:
+            //    1) 주소 매칭 성공 → 도로명/지번 주소
+            //    2) 조회 진행 중   → "위치 확인 중..."
+            //    3) 실패/좌표 없음 → "위치 정보 없음"
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _AddressLine(
+                address: displayAddress,
+                loading: addressLoading,
               ),
+            ),
 
             // ── 네이버 지도 바로가기 (좌표가 있을 때만 표시) ─────────────
             if (data.latitude != null && data.longitude != null)
@@ -271,6 +306,81 @@ class _DataBody extends StatelessWidget {
     if (hours < 1) return '주차 후 ${totalMin}분 경과';
     if (mins == 0) return '주차 후 ${hours}시간 경과';
     return '주차 후 ${hours}시간 ${mins}분 경과';
+  }
+}
+
+// ── 주소 라인 (3-state) ──────────────────────────────────────────────────────
+
+/// 주차 지점 주소를 표시하는 한 줄 컴포넌트.
+///
+/// 입력 조합에 따라 다음 3가지 상태로 자동 전환된다:
+/// - **주소 있음**: 파란 핀 아이콘 + 도로명/지번 주소
+/// - **로딩 중**:  탐색 아이콘 + "위치 확인 중..." (좌표→Kakao 조회 진행 중)
+/// - **위치 없음**: 회색 핀-OFF 아이콘 + "위치 정보 없음" (조회 실패 또는 좌표 없음)
+class _AddressLine extends StatelessWidget {
+  final String? address;
+  final bool loading;
+
+  const _AddressLine({required this.address, required this.loading});
+
+  @override
+  Widget build(BuildContext context) {
+    final hasAddress = address != null && address!.isNotEmpty;
+
+    final IconData icon;
+    final Color iconColor;
+    final String text;
+    final Color textColor;
+    final FontWeight fontWeight;
+
+    if (hasAddress) {
+      icon = Icons.place_rounded;
+      iconColor = AppTheme.tossBlue;
+      text = address!;
+      textColor = const Color(0xFF333D4B);
+      fontWeight = FontWeight.w600;
+    } else if (loading) {
+      icon = Icons.location_searching_rounded;
+      iconColor = AppTheme.gray500;
+      text = '위치 확인 중...';
+      textColor = AppTheme.gray500;
+      fontWeight = FontWeight.w500;
+    } else {
+      icon = Icons.location_off_rounded;
+      iconColor = AppTheme.gray500;
+      text = '위치 정보 없음';
+      textColor = AppTheme.gray500;
+      fontWeight = FontWeight.w500;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7F9FC),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE5E8EB), width: 0.5),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: iconColor),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: fontWeight,
+                color: textColor,
+                height: 1.4,
+                letterSpacing: -0.2,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
