@@ -8,9 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
-import '../../core/config/app_config.dart';
-import '../../core/services/gemini_ocr_service.dart';
 import '../../core/services/location_service.dart';
+import '../../core/services/mlkit_ocr_service.dart';
 import '../../data/models/parking_data.dart';
 import '../../data/repositories/parking_repository.dart';
 
@@ -40,7 +39,7 @@ class CameraResult {
 /// 1. 카메라 초기화 (후면 카메라)
 /// 2. 사용자가 주차 표지판을 뷰파인더에 맞추고 촬영 버튼 클릭
 /// 3. 사진을 앱 문서 디렉터리에 저장
-/// 4. OcrRepository로 구역 텍스트 추출
+/// 4. MlkitOcrService 로 구역 텍스트 온디바이스 추출 (오프라인)
 /// 5. ParkingRepository로 결과 저장
 /// 6. 결과 확인 바텀시트 표시 → Navigator.pop으로 결과 반환
 class CameraScreen extends StatefulWidget {
@@ -199,14 +198,11 @@ class _CameraScreenState extends State<CameraScreen>
 
       if (!mounted) return;
 
-      // 4. Gemini Vision OCR — 구역/층 자동 인식 (실패해도 수동 입력 폴백).
-      //    API 키가 설정돼 있을 때만 호출되며, GeminiOcrService 내부에서
-      //    5초 타임아웃·예외 흡수가 일어나므로 여기선 별도 방어가 필요 없다.
-      GeminiOcrResult? ocrHint;
-      if (AppConfig.isGeminiConfigured) {
-        _setStatus('AI가 구역 번호 인식 중...');
-        ocrHint = await GeminiOcrService.extractZone(savedPath);
-      }
+      // 4. ML Kit On-device OCR — 구역/층 자동 인식 (완전 오프라인).
+      //    네트워크·API 키 불필요, 모든 실패는 서비스 내부에서 empty 로 변환.
+      //    실패해도 사용자는 수동 입력 필드로 그대로 진행할 수 있다.
+      _setStatus('구역 번호 인식 중...');
+      final ocrHint = await MlkitOcrService.extractZone(savedPath);
 
       if (!mounted) return;
 
@@ -277,7 +273,7 @@ class _CameraScreenState extends State<CameraScreen>
 
   Future<void> _showResultSheet(
     CameraResult result, {
-    GeminiOcrResult? ocrHint,
+    MlkitOcrResult? ocrHint,
   }) async {
     // 바텀시트 결과로 "저장 완료된 CameraResult" 를 받는다. null 이면 재촬영/취소.
     //
@@ -297,7 +293,7 @@ class _CameraScreenState extends State<CameraScreen>
         // 촬영과 동시에 시작된 백그라운드 위치 Future 를 전달해,
         // 시트에서 역지오코딩된 주소를 실시간 표시한다.
         pendingLocation: _pendingLocation,
-        // Gemini Vision OCR 힌트. null 이면 (실패/타임아웃/키 미설정) 수동 입력.
+        // ML Kit OCR 힌트. floor/zone 이 빈 문자열이면 수동 입력 유도.
         ocrHint: ocrHint,
         onConfirm: (edited) async {
           // 저장 버튼 UX 원칙: 즉시 반응, 절대 블로킹 금지.
@@ -620,10 +616,10 @@ class _ResultBottomSheet extends StatefulWidget {
   /// 시트가 열릴 때 await 하여 주소 라인에 바인딩한다.
   final Future<LocationSnapshot>? pendingLocation;
 
-  /// Gemini Vision API 가 뽑아낸 층/구역 힌트. null 이면 자동 인식을
+  /// ML Kit OCR 가 뽑아낸 층/구역 힌트. null 또는 빈 문자열이면 자동 인식을
   /// 건너뛰고 사용자가 처음부터 수동 입력한다. non-null 이어도 사용자는
   /// 언제든 수정 가능 — 어디까지나 기본값 채움용이다.
-  final GeminiOcrResult? ocrHint;
+  final MlkitOcrResult? ocrHint;
 
   const _ResultBottomSheet({
     required this.result,
@@ -665,7 +661,7 @@ class _ResultBottomSheetState extends State<_ResultBottomSheet> {
     _awaitAddress();
   }
 
-  /// Gemini Vision 이 반환한 힌트를 입력 필드 초기값으로 채운다.
+  /// ML Kit OCR 가 반환한 힌트를 입력 필드 초기값으로 채운다.
   ///
   /// 힌트가 null 이거나 빈 문자열이면 해당 필드는 그대로 비워둔 채 사용자
   /// 수동 입력을 기다린다. 지상/지하 토글은 힌트가 있을 때만 덮어써,

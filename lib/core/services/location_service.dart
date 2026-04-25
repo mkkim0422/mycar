@@ -53,12 +53,18 @@ class LocationService {
   /// 30m 를 허용하면 사성로75번길 ↔ 광일로 처럼 인접 도로가 혼동될 수 있다.
   static const double _targetAccuracyMeters = 20;
 
+  /// 절대 폐기 임계치. 윈도우 만료 시에도 best 가 이 값보다 나쁘면
+  /// "위치 못 찾음" 으로 처리해 마커를 찍지 않는다 — 50m 초과 fix 는 옆
+  /// 도로/건물 단위로 어긋나 사용자에게 *틀린* 위치를 보여주는 게
+  /// 위치 미표시보다 훨씬 큰 혼란을 일으킨다.
+  static const double _maxAcceptableAccuracy = 50;
+
   /// lastKnownPosition 즉시 수용 기준.
-  /// - 1분 이내 (그 이상이면 차량 이동 가능성)
+  /// - 30초 이내 (그 이상이면 차량 이동·실내 진입 등 stale 가능성)
   /// - 30m 이내 (한국 이면도로 매칭 안정권. 50m 넘으면 옆 도로로 혼동)
   /// 기존 200m/2분 은 "건물 블록 단위"엔 맞지만 "도로명 단위"에선 잘못된 이웃
   /// 도로를 반환할 수 있어 기각됐다. (예: 사성로75번길→광일로 오류)
-  static const _cachedFixMaxAge = Duration(minutes: 1);
+  static const _cachedFixMaxAge = Duration(seconds: 30);
   static const double _cachedFixMaxAccuracy = 30;
 
   /// 현재 위치와 한국어 주소를 조회한다. 실패 시 [LocationSnapshot.empty].
@@ -88,8 +94,10 @@ class LocationService {
       if (position == null) return LocationSnapshot.empty;
 
       debugPrint(
-          '[LocationService] fix: (${position.latitude}, ${position.longitude}) '
-          '± ${position.accuracy.toStringAsFixed(1)}m');
+        '[Location] 좌표: lat=${position.latitude}, '
+        'lng=${position.longitude}, '
+        'accuracy=${position.accuracy.toStringAsFixed(1)}m',
+      );
 
       // 4) 역지오코딩 (실패해도 좌표는 유지)
       final address = await _reverseGeocode(
@@ -112,11 +120,13 @@ class LocationService {
   ///
   /// ## 전략 (네이티브 카메라 앱과 동일한 패턴)
   /// 1. **lastKnownPosition 즉시 조회** — OS Fused 가 유지하는 캐시 fix.
-  ///    2분 이내 & 200m 이내면 **그대로 반환** (대기 0초). 대부분의 경우 여기서 종료.
+  ///    30초 이내 & 30m 이내면 **그대로 반환** (대기 0초). 대부분의 경우 여기서 종료.
   /// 2. 캐시가 없거나 너무 오래됐으면 **포지션 스트림으로 신규 fix 수렴**.
   ///    - lastKnown 을 seed 로 시작해 더 정확한 fix 가 도착하면 교체.
-  ///    - 30m 달성 시 조기 종료, 아니면 4초 윈도우 만료 시 best 반환.
+  ///    - 20m 달성 시 조기 종료, 아니면 6초 윈도우 만료 시 best 반환.
   /// 3. 스트림도 실패하면 신선도 무관하게 lastKnown 폴백.
+  /// 4. 최종 fix 가 50m 초과면 **null 반환** — 잘못된 마커 위치를 보여주는 것보다
+  ///    "위치 못 찾음" 처리가 사용자 혼란이 적다.
   static Future<Position?> _acquirePosition() async {
     // 1) lastKnown 즉시 조회
     Position? lastKnown;
@@ -164,9 +174,22 @@ class LocationService {
       final result = await completer.future;
       await sub.cancel();
       // 스트림이 빈손이면 신선도 무관 lastKnown 폴백
-      return result ?? lastKnown;
+      final fix = result ?? lastKnown;
+      // 50m 초과 fix 는 옆 도로/건물 단위로 마커가 어긋나므로 폐기
+      if (fix != null && fix.accuracy > _maxAcceptableAccuracy) {
+        debugPrint(
+          '[LocationService] best accuracy '
+          '${fix.accuracy.toStringAsFixed(1)}m > '
+          '${_maxAcceptableAccuracy.toStringAsFixed(0)}m → 폐기',
+        );
+        return null;
+      }
+      return fix;
     } catch (e) {
       debugPrint('[LocationService] _acquirePosition 예외: $e');
+      if (lastKnown != null && lastKnown.accuracy > _maxAcceptableAccuracy) {
+        return null;
+      }
       return lastKnown;
     }
   }
@@ -180,30 +203,21 @@ class LocationService {
 
   /// 좌표 → 한국어 주소. 실패 시 null.
   ///
-  /// ## 우선순위 체인 (정확도 순)
-  /// 1. **Kakao Local API** — 한국 정부 도로명주소 DB 직결, 이면도로·번지 완벽 매칭
-  /// 2. **Nominatim (OpenStreetMap)** — 국제 무료 서비스, 한국 이면도로는 커버 미흡
-  /// 3. Android 네이티브 Geocoder — 오프라인/네트워크 실패 시 폴백
+  /// ## 우선순위
+  /// 1. **Kakao Local API** — 한국 행안부 도로명주소 DB 직결. 이면도로·번지·
+  ///    건물번호까지 정확. 본 앱의 사실상 유일한 역지오코더.
+  /// 2. Android 네이티브 Geocoder — Kakao 키 미설정 또는 네트워크 실패 시
+  ///    동작하는 오프라인 안전망. POI 오염 가능성이 있어 1순위가 아닌 폴백 전용.
   ///
-  /// Kakao 가 설정돼 있으면 그것만 사용(가장 정확). 실패 시 OSM→Android 순 폴백.
-  /// Kakao 미설정 시에는 OSM 과 Android 를 **병렬** 실행해 체감 지연을 줄인다.
-  ///
-  /// Android Geocoder 단독 사용은 Google POI DB 가 도로명보다 아파트 단지명을
-  /// 우선시하는 구조라 "철산주공 10단지아파트" 같은 잡음 결과를 반복 생성한다.
+  /// Nominatim(OSM) 은 한국 이면도로 커버리지 미흡(예: "사성로75번길" 미등록 시
+  /// "광일로" 로 잘못 매칭) 으로 제거됐다.
   static Future<String?> _reverseGeocode(double lat, double lng) async {
-    // 1순위: Kakao (설정돼 있을 때만)
+    debugPrint('[Kakao] configured: ${AppConfig.isKakaoLocalApiConfigured}');
     if (AppConfig.isKakaoLocalApiConfigured) {
       final fromKakao = await _reverseGeocodeKakao(lat, lng);
       if (fromKakao != null && fromKakao.isNotEmpty) return fromKakao;
     }
-
-    // 2·3순위: Nominatim + Android 병렬, OSM 우선 수거
-    final osmFuture = _reverseGeocodeNominatim(lat, lng);
-    final androidFuture = _reverseGeocodeAndroid(lat, lng);
-
-    final fromOsm = await osmFuture;
-    if (fromOsm != null && fromOsm.isNotEmpty) return fromOsm;
-    return await androidFuture;
+    return await _reverseGeocodeAndroid(lat, lng);
   }
 
   /// Kakao Local API 좌표→주소 변환.
@@ -223,6 +237,9 @@ class LocationService {
   /// 도로명주소(`road_address`) 를 우선 채택하고, 없으면 지번주소(`address`) 사용.
   /// 두 주소 모두 한국 행안부 도로명주소 체계 그대로라 이면도로·번지까지 정확하다.
   static Future<String?> _reverseGeocodeKakao(double lat, double lng) async {
+    debugPrint(
+      '[Kakao] 호출 시작: key=${AppConfig.kakaoRestApiKey.substring(0, 8)}...',
+    );
     try {
       final uri = Uri.parse(
         'https://dapi.kakao.com/v2/local/geo/coord2address.json'
@@ -233,10 +250,12 @@ class LocationService {
         headers: {
           'Authorization': 'KakaoAK ${AppConfig.kakaoRestApiKey}',
         },
-      ).timeout(const Duration(seconds: 3));
+      ).timeout(const Duration(seconds: 10));
+
+      debugPrint('[Kakao] 응답 코드: ${res.statusCode}');
+      debugPrint('[Kakao] 응답 내용: ${res.body}');
 
       if (res.statusCode != 200) {
-        debugPrint('[LocationService] Kakao ${res.statusCode}: ${res.body}');
         return null;
       }
 
@@ -266,100 +285,10 @@ class LocationService {
     }
   }
 
-  /// OpenStreetMap Nominatim 역지오코딩.
-  ///
-  /// ## API
-  /// - Endpoint : `https://nominatim.openstreetmap.org/reverse`
-  /// - Auth     : 키 불필요 (공개 무료 서비스)
-  /// - Locale   : `accept-language=ko` 로 한국어 결과 강제
-  /// - Zoom 18  : 건물 단위 정확도 (도로명 + 번지까지)
-  ///
-  /// ## Usage Policy 준수 사항
-  /// - User-Agent 필수 (앱 식별자) — 미설정 시 403 반환
-  /// - 초당 1회 이하 (사진 촬영 빈도라 자연 만족)
-  /// - Bulk geocoding 금지 (앱은 촬영당 1회 호출이라 무관)
-  /// 출처: https://operations.osmfoundation.org/policies/nominatim/
-  ///
-  /// ## 한국 주소 정확도
-  /// 도시/광역시는 도로명·번지가 거의 100% 매칭. 아파트 단지명 대신 실제
-  /// 도로명("사성로75번길")을 반환한다는 점이 Google Geocoder 와의 결정적 차이.
-  static Future<String?> _reverseGeocodeNominatim(double lat, double lng) async {
-    try {
-      final uri = Uri.parse(
-        'https://nominatim.openstreetmap.org/reverse'
-        '?format=jsonv2&lat=$lat&lon=$lng&accept-language=ko&zoom=18&addressdetails=1',
-      );
-      final res = await http.get(
-        uri,
-        headers: const {
-          // User-Agent 누락 시 Nominatim 이 403 으로 거절한다.
-          'User-Agent': 'SnapPark/2.0 (com.snappark; help@sphinfo.co.kr)',
-        },
-      ).timeout(const Duration(seconds: 3));
-
-      if (res.statusCode != 200) {
-        debugPrint('[LocationService] Nominatim ${res.statusCode}');
-        return null;
-      }
-
-      final body = jsonDecode(utf8.decode(res.bodyBytes));
-      if (body is! Map<String, dynamic>) return null;
-      final addr = body['address'];
-      if (addr is! Map<String, dynamic>) return null;
-
-      return _formatNominatimAddress(addr);
-    } catch (e) {
-      debugPrint('[LocationService] Nominatim 실패: $e');
-      return null;
-    }
-  }
-
-  /// Nominatim `address` 객체를 "<시/구> <동> <도로명> <번지>" 형태로 합성.
-  ///
-  /// Nominatim 의 한국 주소 키 매핑 (관찰된 경향):
-  ///   borough        : 서울 안의 "강남구" 같은 자치구
-  ///   city_district  : borough 의 별칭으로 들어오는 경우
-  ///   city           : "광명시", "수원시" 같은 시 단위
-  ///   town/county    : 군 단위 또는 일부 읍면 구역
-  ///   suburb         : "철산동", "역삼동" 같은 행정동
-  ///   neighbourhood  : suburb 의 보조 키
-  ///   road           : "사성로75번길", "테헤란로" 도로명
-  ///   house_number   : "1", "123-45" 건물번호
-  static String? _formatNominatimAddress(Map<String, dynamic> addr) {
-    String? pick(List<String> keys) {
-      for (final k in keys) {
-        final v = addr[k];
-        if (v is String && v.trim().isNotEmpty) return v.trim();
-      }
-      return null;
-    }
-
-    // 가장 세부적인 시·군·구 단위 우선 (서울이면 borough="강남구",
-    // 광명/수원 등은 city="광명시"). state(경기도/서울특별시) 는 중복이라 제외.
-    final city = pick(['borough', 'city_district', 'city', 'town', 'county']);
-    final dong = pick(['suburb', 'neighbourhood', 'quarter', 'village', 'hamlet']);
-    final road = pick(['road']);
-    final bldgNo = pick(['house_number']);
-
-    final parts = <String>[];
-    final seen = <String>{};
-    for (final piece in [city, dong, road, bldgNo]) {
-      if (piece == null || piece.isEmpty) continue;
-      if (seen.contains(piece)) continue;
-      // 중첩 포함 방지: 이미 추가된 토큰이 이 piece 를 포함하거나 그 반대면 스킵.
-      if (seen.any((e) => e.contains(piece) || piece.contains(e))) continue;
-      seen.add(piece);
-      parts.add(piece);
-    }
-
-    if (parts.isEmpty) return null;
-    return parts.join(' ');
-  }
-
   /// 폴백: Android 네이티브 Geocoder 기반 역지오코딩.
   ///
-  /// 기존 구현 유지 — Nominatim 호출이 네트워크 오류/타임아웃으로 실패한
-  /// 경우에만 사용된다. POI 오염이 있을 수 있어 1순위가 아닌 안전망 역할.
+  /// Kakao API 키가 비어 있거나 Kakao 호출이 실패한 경우에만 사용된다.
+  /// POI 오염이 있을 수 있어 1순위가 아닌 안전망 역할.
   static Future<String?> _reverseGeocodeAndroid(double lat, double lng) async {
     try {
       await setLocaleIdentifier('ko_KR');
