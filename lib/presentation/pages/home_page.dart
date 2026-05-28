@@ -463,7 +463,9 @@ class _DataBody extends StatelessWidget {
                         onTap: onRegisterTap,
                       ),
 
-                      const SizedBox(height: 16),
+                      // AdMob 정책: 주요 액션 버튼과 광고 배너 사이 충분한
+                      // 여백 확보 (실수 클릭 방지). 48dp 표준 터치 타겟 이상.
+                      const SizedBox(height: 48),
                     ],
                   ),
                 ),
@@ -668,7 +670,8 @@ class _EmptyBody extends StatelessWidget {
                       _PrimaryButton(
                           label: '+ 신규등록', onTap: onRegisterTap),
 
-                      const SizedBox(height: 20),
+                      // AdMob 정책: 광고 배너와 액션 버튼 사이 48dp 여백.
+                      const SizedBox(height: 48),
                     ],
                   ),
                 ),

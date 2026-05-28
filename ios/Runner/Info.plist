@@ -24,6 +24,18 @@
     <key>CFBundleVersion</key>
     <string>$(FLUTTER_BUILD_NUMBER)</string>
 
+    <!--
+        ── AdMob 앱 ID ─────────────────────────────────────────────────────
+        google_mobile_ads SDK 가 빌드에 포함되어 있으면 이 키가 반드시
+        설정되어야 한다. 미설정 시 앱 실행 즉시 크래시(SDK 정적 초기화 단계).
+        현재 iOS 에서는 배너 노출 자체를 Platform.isAndroid 가드로 막고 있지만,
+        SDK 자체 크래시 방지를 위해 실제 앱 ID 를 사전에 명시한다.
+        iOS 광고 실제 노출 활성화 시 SKAdNetworkItems / NSUserTrackingUsageDescription
+        추가가 필요하다(SETUP_GUIDE 참고).
+    -->
+    <key>GADApplicationIdentifier</key>
+    <string>ca-app-pub-3708412629376493~3704557856</string>
+
     <!-- 카메라 권한: 주차 구역 촬영 및 OCR 인식에 필요 -->
     <key>NSCameraUsageDescription</key>
     <string>주차 구역 번호를 자동으로 인식하기 위해 카메라 접근이 필요합니다.</string>

@@ -25,8 +25,8 @@ val keystoreProperties = Properties().apply {
 // 실제 광고 노출 자체는 AppConfig.admobRealBannerUnitId 가 설정될 때까지
 // (Dart 측에서) 배너를 숨겨 차단하므로, 테스트 광고가 운영 배포로 나가지 않는다.
 val admobTestAppId = "ca-app-pub-3940256099942544~3347511713" // 공식 테스트 — 변경 금지
-// TODO(릴리스 전): AdMob 콘솔에서 com.snappark 용 실제 앱 ID 발급 후 아래를 교체.
-val admobRealAppId = admobTestAppId
+// AdMob 콘솔에서 발급받은 "주차기억" 앱 ID. release 빌드에 주입된다.
+val admobRealAppId = "ca-app-pub-3708412629376493~3704557856"
 
 android {
     namespace = "com.snappark"

@@ -77,17 +77,60 @@ Future<void> _handleCameraResultAndReload(
   if (cb != null) await cb();
 }
 
+/// AdMob 초기화 전 GDPR(UMP) 동의 폼을 비동기로 처리하고, 동의 결과와
+/// 무관하게 SDK 를 초기화한다. 콘텐츠 등급은 PG(Parental Guidance, 가족용)
+/// 로 고정해 부적절한 광고 노출 위험을 낮춘다.
+Future<void> _initAdsWithConsent() async {
+  try {
+    final completer = Completer<void>();
+    ConsentInformation.instance.requestConsentInfoUpdate(
+      ConsentRequestParameters(),
+      () async {
+        try {
+          await ConsentForm.loadAndShowConsentFormIfRequired((_) {});
+        } catch (_) {}
+        if (!completer.isCompleted) completer.complete();
+      },
+      (FormError _) {
+        if (!completer.isCompleted) completer.complete();
+      },
+    );
+    await completer.future.timeout(
+      const Duration(seconds: 3),
+      onTimeout: () {}, // 동의 서비스 응답 지연 → 광고 초기화로 진행
+    );
+  } catch (_) {
+    // 어떠한 동의 처리 오류도 광고 초기화를 막지 않는다.
+  }
+  try {
+    await MobileAds.instance.initialize();
+    // 콘텐츠 등급: G(전체) / PG / T / MA. 주차 유틸리티 앱 특성상 보수적으로 PG.
+    await MobileAds.instance.updateRequestConfiguration(
+      RequestConfiguration(maxAdContentRating: MaxAdContentRating.pg),
+    );
+  } catch (_) {}
+}
+
 /// Kotlin Native → Dart 방향 MethodChannel.
 const _widgetChannel = MethodChannel('com.snappark/widget');
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // AdMob 초기화 — 첫 호출이 네트워크 I/O 라 await 로 앱 진입을 막지 않는다.
-  // iOS 는 Info.plist(GADApplicationIdentifier) 미설정 → 초기화 시 크래시하므로
-  // 현재는 Android 에서만 초기화한다(추후 iOS 설정 시 가드 해제).
+  // AdMob 초기화 + GDPR(UMP) 동의 처리.
+  //
+  // iOS 는 Info.plist 의 GADApplicationIdentifier 가 설정되어 있어야 SDK 가
+  // 정상 동작한다. 현재 AdBanner 는 Platform.isAndroid 가드로 iOS 노출을
+  // 막고 있으므로 초기화 자체도 Android 만 수행한다.
+  //
+  // ## UMP(User Messaging Platform) 동의 흐름
+  // - EEA/UK/스위스 사용자: 최초 실행 시 동의 폼 자동 표시 → 동의 결과에 따라
+  //   개인화/비개인화 광고 분기. 동의 거부도 광고는 송출(비개인화).
+  // - 그 외 지역(한국 포함): requestConsentInfoUpdate 가 NOT_REQUIRED 반환 →
+  //   폼 호출은 즉시 no-op → 그대로 광고 초기화.
+  // - 네트워크 오류·예외 시에도 광고 초기화는 진행(서비스 가용성 우선).
   if (Platform.isAndroid) {
-    unawaited(MobileAds.instance.initialize());
+    unawaited(_initAdsWithConsent());
   }
 
   // 광고 제거 결제 — 영속 플래그 로드 + 상품 조회 + 구매 복원/스트림 구독.
