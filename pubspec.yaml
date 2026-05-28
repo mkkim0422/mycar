@@ -18,6 +18,15 @@ dependencies:
   freezed_annotation: ^2.4.4
 
   # Camera & OCR
+  # ── OCR 정책 (v4 — 실시간 image stream + AR 박스 + 자동 캡처) ──────────────
+  #   v1(좌표 매핑) → v2(isolate 크롭) 모두 실기기에서 실패해 폐기. 현재 파이프라인:
+  #     1) CameraController.startImageStream → CameraImage 매 프레임
+  #     2) CameraImage → InputImage.fromBytes 변환 (Android nv21 / iOS bgra8888)
+  #     3) ML Kit Korean 인식 (스로틀링 _isProcessing 으로 1회 분석 보장)
+  #     4) boundingBox → 화면 좌표(비율 + 스케일) 변환 → CustomPainter 로 AR 박스
+  #     5) 가이드 영역 교차 + 패턴(영문/숫자, 길이 1~5) 매칭 → 자동 캡처
+  #     6) stopImageStream → takePicture → 시트
+  #   `image` 패키지 의존성 없음 — image stream + ML Kit 만으로 처리.
   camera: ^0.11.0
   google_mlkit_text_recognition: ^0.14.0
   path_provider: ^2.1.4
@@ -48,6 +57,13 @@ dependencies:
 
   # 외부 URL/앱 실행 (네이버 지도 앱 또는 웹 버전 열기)
   url_launcher: ^6.3.1
+  google_mobile_ads: ^8.0.0
+  share_plus: ^13.1.0
+  in_app_purchase: ^3.2.3
+
+  # 사진 EXIF 메타데이터 제거 — 카카오톡 공유/외부 전송 시 촬영 위치(GPS) 노출 방지.
+  # PIPA / 위치정보법 컴플라이언스: 사진에 박힌 GPS 좌표가 PII 로 분류됨.
+  image: ^4.2.0
 
 dev_dependencies:
   flutter_test:
@@ -64,3 +80,4 @@ flutter:
 
   assets:
     - assets/images/
+    - assets/legal/

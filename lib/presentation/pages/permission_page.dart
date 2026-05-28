@@ -4,17 +4,22 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/theme/app_theme.dart';
+import 'policy_page.dart';
 
-/// 권한 안내 + 일괄 요청 온보딩 페이지.
+/// 약관 동의 + 권한 안내·일괄 요청 온보딩 페이지.
 ///
-/// ## 플로우 (토스·카카오뱅크 등 한국 앱 표준 패턴)
+/// ## 플로우 (PIPA + 위치정보법 컴플라이언스)
 /// 1. 앱 최초 실행 시 이 페이지가 먼저 노출
-/// 2. "모두 허용하기" → 카메라·위치·알림 3가지 OS 권한 다이얼로그 순차 표시
-/// 3. 모두 허용 → 다음 단계(위젯 설정 or 홈)로 자동 이동
-/// 4. 일부 거부 → 안내 다이얼로그: "설정으로 이동" or "나중에"
-/// 5. "나중에" 선택해도 다음 단계 진행 (기능 제한 상태로 앱 사용 가능)
+/// 2. **필수 동의 2종** (개인정보처리방침 + 위치기반서비스 이용약관) 체크 필수
+/// 3. **선택 동의 1종** (서비스 이용약관) — 체크 없어도 진행 가능
+/// 4. [동의하고 계속하기] → 권한 안내 단계로 진행
+/// 5. "모두 허용하기" → 카메라·위치·BT·알림 4가지 OS 권한 다이얼로그 순차 표시
+/// 6. 모두 허용 → 다음 단계(위젯 설정 or 홈)로 자동 이동
+/// 7. 일부 거부 → 안내 다이얼로그: "설정으로 이동" or "나중에"
 ///
-/// `is_permission_requested` SharedPrefs 플래그로 1회만 표시.
+/// SharedPreferences 키:
+///   - `is_permission_requested` : 1회 노출 가드
+///   - `terms_agreed_at`         : 동의 시각 (위치정보법 16조 — 6개월 보관)
 class PermissionPage extends StatefulWidget {
   const PermissionPage({super.key});
 
@@ -25,35 +30,46 @@ class PermissionPage extends StatefulWidget {
 class _PermissionPageState extends State<PermissionPage> {
   bool _busy = false;
 
-  /// 3가지 권한을 **하나씩** 순차 요청한 뒤 결과에 따라 안내/이동.
-  ///
-  /// `.request()` 를 리스트로 호출하면 OS가 순서를 보장하지 않아
-  /// 알림 권한이 안내 페이지보다 먼저 뜨는 문제가 발생한다.
-  /// 각 권한을 개별 `await`로 호출하면 이전 다이얼로그가 닫힌 뒤
-  /// 다음 다이얼로그가 열려 사용자 경험이 자연스럽다.
+  /// 1단계: 약관 동의, 2단계: 권한 안내·요청.
+  int _step = 0;
+
+  // 동의 체크 상태
+  bool _agreePrivacy = false;
+  bool _agreeLocation = false;
+  bool _agreeTerms = false; // 선택
+
+  bool get _canProceed => _agreePrivacy && _agreeLocation;
+
+  Future<void> _goToPermissionStep() async {
+    if (!_canProceed) return;
+    // 동의 시각 저장 (위치정보법 제16조 제2항 — 수집·이용·제공사실 확인자료).
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+        'terms_agreed_at', DateTime.now().toIso8601String());
+    await prefs.setBool('agreed_privacy', _agreePrivacy);
+    await prefs.setBool('agreed_location', _agreeLocation);
+    await prefs.setBool('agreed_terms', _agreeTerms);
+    if (!mounted) return;
+    setState(() => _step = 1);
+  }
+
+  /// 4가지 권한을 **하나씩** 순차 요청한 뒤 결과에 따라 안내/이동.
   Future<void> _requestAll() async {
     if (_busy) return;
     setState(() => _busy = true);
 
-    // 하나씩 순차 요청: 카메라 → 위치 → 블루투스 → 알림
     final cameraStatus = await Permission.camera.request();
     if (!mounted) return;
-
     final locationStatus = await Permission.location.request();
     if (!mounted) return;
-
     // Android 12+(API 31): BLUETOOTH_CONNECT 런타임 권한 필수.
-    // 이 권한이 없으면 OS가 ACL_DISCONNECTED 브로드캐스트를 앱에 전달하지 않아
-    // 블루투스 해제 시 주차 알림이 작동하지 않는다.
     final btStatus = await Permission.bluetoothConnect.request();
     if (!mounted) return;
-
     final notificationStatus = await Permission.notification.request();
     if (!mounted) return;
 
     setState(() => _busy = false);
 
-    // 거부된 권한이 있는지 확인
     final denied = <Permission>[];
     if (!cameraStatus.isGranted) denied.add(Permission.camera);
     if (!locationStatus.isGranted) denied.add(Permission.location);
@@ -61,7 +77,6 @@ class _PermissionPageState extends State<PermissionPage> {
     if (!notificationStatus.isGranted) denied.add(Permission.notification);
 
     if (denied.isNotEmpty) {
-      // 거부 항목 있음 → 설정 유도 다이얼로그
       final goSettings = await showDialog<bool>(
         context: context,
         barrierDismissible: false,
@@ -97,25 +112,19 @@ class _PermissionPageState extends State<PermissionPage> {
           ],
         ),
       );
-
       if (goSettings == true) {
         AppSettings.openAppSettings();
-        // 사용자가 설정에서 돌아오면 이 페이지가 그대로 보임 → 다시 "모두 허용하기" 가능
         return;
       }
     }
 
-    // 모두 허용 또는 "나중에" → 다음 단계로
     await _markDoneAndProceed();
   }
 
   Future<void> _markDoneAndProceed() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('is_permission_requested', true);
-
     if (!mounted) return;
-
-    // ShellScreen 으로 이동. 위젯 미설정이면 ShellScreen 이 위젯 탭을 자동 선택.
     Navigator.of(context).pushReplacementNamed('/');
   }
 
@@ -124,101 +133,353 @@ class _PermissionPageState extends State<PermissionPage> {
     return Scaffold(
       backgroundColor: AppTheme.gray100,
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 28),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Spacer(flex: 3),
+        child: _step == 0 ? _buildConsentStep() : _buildPermissionStep(),
+      ),
+    );
+  }
 
-              // ── 타이틀 ───────────────────────────────────────────────
-              const Text(
-                '앱을 사용하기 위해\n다음 권한이 필요합니다',
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w900,
-                  color: AppTheme.gray900,
-                  height: 1.35,
-                  letterSpacing: -0.6,
-                ),
-              ),
+  // ──────────────────────────────────────────────────────────────────────────
+  //  Step 0 — 약관 동의
+  // ──────────────────────────────────────────────────────────────────────────
 
-              const SizedBox(height: 36),
-
-              // ── 권한 항목 4개 ──────────────────────────────────────
-              const _PermissionItem(
-                icon: Icons.camera_alt_rounded,
-                title: '카메라',
-                desc: '주차 구역 사진 촬영을 위해 필요합니다',
-              ),
-              const SizedBox(height: 20),
-              const _PermissionItem(
-                icon: Icons.location_on_rounded,
-                title: '위치',
-                desc: '주차 지점 GPS 좌표 저장을 위해 필요합니다',
-              ),
-              const SizedBox(height: 20),
-              const _PermissionItem(
-                icon: Icons.bluetooth_rounded,
-                title: '블루투스',
-                desc: '차량 블루투스 해제 감지를 위해 필요합니다',
-              ),
-              const SizedBox(height: 20),
-              const _PermissionItem(
-                icon: Icons.notifications_rounded,
-                title: '알림',
-                desc: '주차 알림을 보내기 위해 필요합니다',
-              ),
-
-              const Spacer(flex: 5),
-
-              // ── CTA 버튼 ─────────────────────────────────────────
-              GestureDetector(
-                onTap: _busy ? null : _requestAll,
-                child: Container(
-                  height: 56,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF0064FF), Color(0xFF7C5CFC)],
-                    ),
-                    borderRadius: BorderRadius.circular(28),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppTheme.tossBlue.withValues(alpha: 0.30),
-                        blurRadius: 18,
-                        offset: const Offset(0, 6),
-                      ),
-                    ],
-                  ),
-                  alignment: Alignment.center,
-                  child: _busy
-                      ? const SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2.5,
-                          ),
-                        )
-                      : const Text(
-                          '모두 허용하기',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.white,
-                            letterSpacing: -0.2,
-                          ),
-                        ),
-                ),
-              ),
-
-              const SizedBox(height: 24),
-            ],
+  Widget _buildConsentStep() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 28),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 36),
+          const Text(
+            '서비스 이용을 위해\n약관에 동의해 주세요',
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w900,
+              color: AppTheme.gray900,
+              height: 1.35,
+              letterSpacing: -0.6,
+            ),
           ),
+          const SizedBox(height: 12),
+          const Text(
+            '데이터는 회원님의 단말기 안에만 저장되며\n외부 서버로 전송하지 않습니다',
+            style: TextStyle(
+              fontSize: 14,
+              height: 1.5,
+              color: AppTheme.gray500,
+            ),
+          ),
+
+          const SizedBox(height: 36),
+
+          // ── 전체 동의 ────────────────────────────────────────
+          _AllAgreeBar(
+            checked:
+                _agreePrivacy && _agreeLocation && _agreeTerms,
+            onTap: () {
+              final newAll = !(_agreePrivacy &&
+                  _agreeLocation &&
+                  _agreeTerms);
+              setState(() {
+                _agreePrivacy = newAll;
+                _agreeLocation = newAll;
+                _agreeTerms = newAll;
+              });
+            },
+          ),
+
+          const SizedBox(height: 16),
+
+          // ── 개별 동의 ────────────────────────────────────────
+          _ConsentRow(
+            label: '개인정보처리방침 동의',
+            required: true,
+            checked: _agreePrivacy,
+            onChanged: (v) => setState(() => _agreePrivacy = v),
+            onView: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => const PolicyPage(doc: PolicyDocument.privacy),
+            )),
+          ),
+          const _ConsentDivider(),
+          _ConsentRow(
+            label: '위치기반서비스 이용약관 동의',
+            required: true,
+            checked: _agreeLocation,
+            onChanged: (v) => setState(() => _agreeLocation = v),
+            onView: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => const PolicyPage(doc: PolicyDocument.location),
+            )),
+          ),
+          const _ConsentDivider(),
+          _ConsentRow(
+            label: '서비스 이용약관 동의',
+            required: false,
+            checked: _agreeTerms,
+            onChanged: (v) => setState(() => _agreeTerms = v),
+            onView: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => const PolicyPage(doc: PolicyDocument.terms),
+            )),
+          ),
+
+          const Spacer(),
+
+          // ── CTA 버튼 ─────────────────────────────────────────
+          GestureDetector(
+            onTap: _canProceed ? _goToPermissionStep : null,
+            child: Container(
+              height: 56,
+              decoration: BoxDecoration(
+                gradient: _canProceed
+                    ? const LinearGradient(
+                        colors: [Color(0xFF0064FF), Color(0xFF7C5CFC)],
+                      )
+                    : null,
+                color: _canProceed ? null : AppTheme.gray200,
+                borderRadius: BorderRadius.circular(28),
+                boxShadow: _canProceed
+                    ? [
+                        BoxShadow(
+                          color: AppTheme.tossBlue.withValues(alpha: 0.30),
+                          blurRadius: 18,
+                          offset: const Offset(0, 6),
+                        ),
+                      ]
+                    : null,
+              ),
+              alignment: Alignment.center,
+              child: const Text(
+                '동의하고 계속하기',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                  letterSpacing: -0.2,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  //  Step 1 — 권한 안내·요청
+  // ──────────────────────────────────────────────────────────────────────────
+
+  Widget _buildPermissionStep() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 28),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Spacer(flex: 3),
+          const Text(
+            '앱을 사용하기 위해\n다음 권한이 필요합니다',
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w900,
+              color: AppTheme.gray900,
+              height: 1.35,
+              letterSpacing: -0.6,
+            ),
+          ),
+          const SizedBox(height: 36),
+          const _PermissionItem(
+            icon: Icons.camera_alt_rounded,
+            title: '카메라',
+            desc: '주차 구역 사진 촬영을 위해 필요합니다',
+          ),
+          const SizedBox(height: 20),
+          const _PermissionItem(
+            icon: Icons.location_on_rounded,
+            title: '위치',
+            desc: '주차 지점 GPS 좌표 저장을 위해 필요합니다',
+          ),
+          const SizedBox(height: 20),
+          const _PermissionItem(
+            icon: Icons.bluetooth_rounded,
+            title: '블루투스',
+            desc: '차량 블루투스 해제 감지를 위해 필요합니다',
+          ),
+          const SizedBox(height: 20),
+          const _PermissionItem(
+            icon: Icons.notifications_rounded,
+            title: '알림',
+            desc: '주차 알림을 보내기 위해 필요합니다',
+          ),
+          const Spacer(flex: 5),
+          GestureDetector(
+            onTap: _busy ? null : _requestAll,
+            child: Container(
+              height: 56,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF0064FF), Color(0xFF7C5CFC)],
+                ),
+                borderRadius: BorderRadius.circular(28),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppTheme.tossBlue.withValues(alpha: 0.30),
+                    blurRadius: 18,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              alignment: Alignment.center,
+              child: _busy
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2.5,
+                      ),
+                    )
+                  : const Text(
+                      '모두 허용하기',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+            ),
+          ),
+          const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+}
+
+/// 전체 동의 한 줄.
+class _AllAgreeBar extends StatelessWidget {
+  final bool checked;
+  final VoidCallback onTap;
+  const _AllAgreeBar({required this.checked, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: checked ? AppTheme.tossBlue : AppTheme.gray200,
+            width: checked ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              checked
+                  ? Icons.check_circle_rounded
+                  : Icons.check_circle_outline_rounded,
+              color: checked ? AppTheme.tossBlue : AppTheme.gray200,
+              size: 24,
+            ),
+            const SizedBox(width: 12),
+            const Text(
+              '약관 전체 동의',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+                color: AppTheme.gray900,
+                letterSpacing: -0.3,
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
+}
+
+/// 개별 동의 한 줄.
+class _ConsentRow extends StatelessWidget {
+  final String label;
+  final bool required;
+  final bool checked;
+  final ValueChanged<bool> onChanged;
+  final VoidCallback onView;
+
+  const _ConsentRow({
+    required this.label,
+    required this.required,
+    required this.checked,
+    required this.onChanged,
+    required this.onView,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => onChanged(!checked),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
+        child: Row(
+          children: [
+            Icon(
+              checked
+                  ? Icons.check_circle_rounded
+                  : Icons.check_circle_outline_rounded,
+              color: checked ? AppTheme.tossBlue : AppTheme.gray200,
+              size: 22,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: RichText(
+                text: TextSpan(
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: AppTheme.gray900,
+                    letterSpacing: -0.2,
+                  ),
+                  children: [
+                    TextSpan(
+                      text: required ? '(필수) ' : '(선택) ',
+                      style: TextStyle(
+                        color:
+                            required ? AppTheme.tossBlue : AppTheme.gray500,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    TextSpan(text: label),
+                  ],
+                ),
+              ),
+            ),
+            GestureDetector(
+              onTap: onView,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                child: Text(
+                  '보기',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: AppTheme.gray500,
+                    decoration: TextDecoration.underline,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ConsentDivider extends StatelessWidget {
+  const _ConsentDivider();
+  @override
+  Widget build(BuildContext context) =>
+      const Divider(height: 1, color: Color(0xFFEEF1F4));
 }
 
 /// 권한 안내 한 줄 아이템.

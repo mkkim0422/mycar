@@ -312,7 +312,7 @@ class MainActivity : FlutterActivity() {
 
         val timestamp = when (size) {
             "2x1" -> "4/18(금) 오후 12:15"
-            "2x2" -> "4/18(금) 오후 12:15 · 주차 후 32분 경과"
+            "2x2" -> "4/18(금) 오후 12:15"
             else -> "4월 18일(금) 오후 12:15 · 주차 후 32분 경과"
         }
         runCatching { views.setTextViewText(R.id.tv_timestamp, timestamp) }

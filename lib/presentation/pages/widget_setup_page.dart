@@ -101,7 +101,7 @@ class _WidgetSetupPageState extends State<WidgetSetupPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('자동 추가가 지원되지 않는 런처입니다.\n'
-                '홈 화면을 길게 누르고 "내차어디"를 찾아 추가해 주세요'),
+                '홈 화면을 길게 누르고 "주차기억"을 찾아 추가해 주세요'),
             behavior: SnackBarBehavior.floating,
             duration: Duration(seconds: 3),
           ),
@@ -572,7 +572,7 @@ class _SampleContent extends StatelessWidget {
     const sampleZone = '지하 1층 · 22구역';
     final sampleTime = switch (size) {
       WidgetSize.size2x1 => '4/18(금) 오후 12:15',
-      WidgetSize.size2x2 => '4/18(금) 오후 12:15 · 주차 후 32분 경과',
+      WidgetSize.size2x2 => '4/18(금) 오후 12:15',
       _ => '4월 18일(금) 오후 12:15 · 주차 후 32분 경과',
     };
     final showAddress =

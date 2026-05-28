@@ -18,6 +18,14 @@
 -keep class com.google.android.gms.internal.mlkit_vision_text_** { *; }
 -dontwarn com.google.mlkit.**
 
+# ── Google Mobile Ads (AdMob 배너) ───────────────────────────────────────
+-keep class com.google.android.gms.ads.** { *; }
+-dontwarn com.google.android.gms.ads.**
+
+# ── Google Play Billing (in_app_purchase: 광고 제거 결제) ─────────────────
+-keep class com.android.billingclient.** { *; }
+-dontwarn com.android.billingclient.**
+
 # ── Kakao SDK ────────────────────────────────────────────────────────────
 -keep class com.kakao.sdk.** { *; }
 -keep class com.kakao.flutter.sdk.** { *; }

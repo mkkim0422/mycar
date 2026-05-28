@@ -17,6 +17,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.snappark.MainActivity
@@ -94,6 +95,14 @@ class MotionDetectionService : Service(), SensorEventListener {
 
         /** 서비스 최대 수명 (ms). 어떤 상황에서든 이 시간 후 알림 발송. */
         private const val MAX_TIMEOUT_MS = 120_000L
+
+        // ── fireParkingNotification reason 라벨 ─────────────────────────────
+        // 어느 경로에서 알림이 발사됐는지(또는 dedupe 로 차단됐는지) 로그/진단용.
+        // String 상수로 둔 이유: enum 도입 시 외부 노출이 늘고 컴파일 단위가
+        // 거대해지므로, 호출 사이트 3곳에서만 쓰는 이 패턴엔 const string 이 가볍다.
+        private const val REASON_MOTION = "motion"
+        private const val REASON_MAX_TIMEOUT = "max_timeout"
+        private const val REASON_NO_SENSOR = "no_sensor"
     }
 
     private var sensorManager: SensorManager? = null
@@ -139,7 +148,7 @@ class MotionDetectionService : Service(), SensorEventListener {
                 startTime = SystemClock.elapsedRealtime()
                 handler?.postDelayed(::onMaxTimeout, MAX_TIMEOUT_MS)
             } else {
-                fireParkingNotification()
+                fireParkingNotification(REASON_NO_SENSOR)
                 stopSelf()
             }
         }, RECONNECT_GUARD_MS)
@@ -178,7 +187,7 @@ class MotionDetectionService : Service(), SensorEventListener {
         // Phase 3: 임계값 초과 → 즉시 알림
         if (delta > MOTION_THRESHOLD) {
             triggered = true
-            fireParkingNotification()
+            fireParkingNotification(REASON_MOTION)
             cleanup()
             stopSelf()
         }
@@ -192,7 +201,7 @@ class MotionDetectionService : Service(), SensorEventListener {
     private fun onMaxTimeout() {
         if (triggered) return
         triggered = true
-        fireParkingNotification()
+        fireParkingNotification(REASON_MAX_TIMEOUT)
         cleanup()
         stopSelf()
     }
@@ -206,11 +215,24 @@ class MotionDetectionService : Service(), SensorEventListener {
      * - CATEGORY_REMINDER → 시스템 DND 필터에서 리마인더로 분류
      * - setFullScreenIntent → 잠금 화면에서도 즉시 노출
      * - onTap → MainActivity(PAYLOAD_OPEN_CAMERA) → Flutter 카메라 화면
+     *
+     * @param reason 어느 경로에서 호출됐는지 진단 라벨. 호출 사이트가 컴파일 타임에
+     *   누락되지 않도록 필수 인자로 받는다. 로그·dedupe 차단 메시지에 노출된다.
      */
-    private fun fireParkingNotification() {
+    private fun fireParkingNotification(reason: String) {
         // 사용자가 서비스 실행 중에 자동 감지 토글을 OFF 로 바꾼 경우를 방어.
         // (Receiver 는 이벤트 진입 시점에만 한 번 검사하므로 여기서도 재확인)
         if (!SharedPrefsHelper.isBtAutoEnabled(this)) return
+
+        // ── 중복 발사 dedupe 가드 ────────────────────────────────────────────
+        //    자동 필터 오인식, BT 모듈 플리커, 동일 인스턴스 race 등으로 단시간
+        //    내 두 번째 호출이 들어와도 이 지점에서 차단한다. 모든 호출 경로가
+        //    이 함수를 거치므로 우회로가 없다.
+        if (!SharedPrefsHelper.shouldFireParkingNotification(this)) {
+            Log.i("SnapPark", "parking notification suppressed (cooldown, reason=$reason)")
+            return
+        }
+        Log.i("SnapPark", "parking notification firing (reason=$reason)")
 
         val launchIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -240,11 +262,16 @@ class MotionDetectionService : Service(), SensorEventListener {
             .setFullScreenIntent(fullScreenPi, true)
             .setVibrate(longArrayOf(0, 250, 100, 250))
             .setDefaults(NotificationCompat.DEFAULT_SOUND)
+            .setBadgeIconType(NotificationCompat.BADGE_ICON_NONE)
+            .setNumber(0)
             .build()
 
         runCatching {
             NotificationManagerCompat.from(this).notify(PARKING_NOTIFICATION_ID, notification)
         }
+        // notify 가 예외를 던졌어도 호출 시도 자체는 발생한 것으로 보고 mark 한다.
+        // (실패한 경우에도 짧은 시간 내 반복 시도를 막는 쪽이 안전하다.)
+        SharedPrefsHelper.markParkingNotificationFired(this)
     }
 
     // ── 포그라운드 서비스 알림 (임시) ────────────────────────────────────────
@@ -257,6 +284,8 @@ class MotionDetectionService : Service(), SensorEventListener {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setSilent(true)
             .setOngoing(true)
+            .setBadgeIconType(NotificationCompat.BADGE_ICON_NONE)
+            .setNumber(0)
             .build()
 
     // ── 채널 생성 ───────────────────────────────────────────────────────────
@@ -281,6 +310,7 @@ class MotionDetectionService : Service(), SensorEventListener {
             description = "주차 위치 기록 알림 (고우선)"
             enableVibration(true)
             vibrationPattern = longArrayOf(0, 250, 100, 250)
+            setShowBadge(false)
         }
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
             .createNotificationChannel(channel)

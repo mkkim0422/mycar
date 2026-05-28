@@ -8,6 +8,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import android.os.Bundle
 import android.view.View
 import android.widget.RemoteViews
 import androidx.exifinterface.media.ExifInterface
@@ -201,7 +202,8 @@ private fun composeHeadline(floor: String, zone: String): String {
  * - 4x2: 2x2 + 주소
  * - 4x4: 4x2와 동일
  */
-private enum class InfoDetail {
+// public — public 인 WidgetBucket.detail 프로퍼티 타입으로 노출되므로.
+enum class InfoDetail {
     ZONE_WITH_TIME,           // 2x1
     ZONE_TIME_ELAPSED,        // 2x2
     ZONE_TIME_ELAPSED_ADDR,   // 4x2, 4x4
@@ -305,7 +307,7 @@ private fun bindDataState(
  * 사이즈별 보조 정보 텍스트를 바인딩한다.
  *
  * - ZONE_WITH_TIME (2x1):  "4/17(목) 오후 3:22"
- * - ZONE_TIME_ELAPSED (2x2): "4/17(목) 오후 3:22 · 주차 후 32분 경과"
+ * - ZONE_TIME_ELAPSED (2x2): "4/17(목) 오후 3:22"
  * - ZONE_TIME_ELAPSED_ADDR (4x2/4x4): "4월 17일(목) 오후 3:22 · 주차 후 32분 경과" + 주소
  */
 private fun bindDetailLine(
@@ -319,10 +321,8 @@ private fun bindDetailLine(
             formatDateCompact(snapshot.timestamp)
         }
         InfoDetail.ZONE_TIME_ELAPSED -> {
-            // 2x2: 날짜+요일+시간 + 경과
-            val dateTime = formatDateMedium(snapshot.timestamp)
-            val elapsed = formatElapsed(snapshot.timestamp)
-            listOf(dateTime, elapsed).filter { it.isNotEmpty() }.joinToString(" · ")
+            // 2x2: 날짜+요일+시간 (경과 표기 제거)
+            formatDateMedium(snapshot.timestamp)
         }
         InfoDetail.ZONE_TIME_ELAPSED_ADDR -> {
             // 4x2/4x4: 전체 날짜+요일+시간 + 경과
@@ -374,105 +374,115 @@ private fun applyInfoOnlyColors(
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 2×1 Provider — 구역 + 주차시간
+// 사이즈 적응 — 리사이즈 시 "제공 사이즈" 레이아웃으로 자동 전환
 // ══════════════════════════════════════════════════════════════════════════════
 
-class ParkingWidget2x1Provider : AppWidgetProvider() {
-    override fun onUpdate(
+/**
+ * 위젯이 표시할 (레이아웃, 정보 상세도) 한 쌍.
+ * 우리가 제공하는 4개 사이즈 = 4개 Bucket.
+ */
+// public — public 인 BaseParkingWidgetProvider 생성자 파라미터로 노출되므로
+// (Kotlin: public API 가 private-in-file 타입을 노출하면 컴파일 에러).
+data class WidgetBucket(val layoutId: Int, val detail: InfoDetail)
+
+private val BUCKET_2x1 = WidgetBucket(R.layout.widget_2x1, InfoDetail.ZONE_WITH_TIME)
+private val BUCKET_2x2 = WidgetBucket(R.layout.widget_2x2, InfoDetail.ZONE_TIME_ELAPSED)
+private val BUCKET_4x2 = WidgetBucket(R.layout.widget_4x2, InfoDetail.ZONE_TIME_ELAPSED_ADDR)
+private val BUCKET_4x4 = WidgetBucket(R.layout.widget_4x4, InfoDetail.ZONE_TIME_ELAPSED_ADDR)
+
+/**
+ * 런처가 보고한 현재 위젯 크기(dp)를 우리가 제공하는 4개 사이즈 중 하나로 매핑한다.
+ *
+ * 분기 순서가 정확성의 핵심:
+ *  1) 넓고 크면        → 4x4 (대형: 사진 + 전체정보 + 주소)
+ *  2) 넓지만 낮으면    → 4x2 (가로형)
+ *  3) 한 줄로 납작하면 → 2x1 (미니: 구역 + 시간)   ← 높이 우선 검사
+ *  4) 그 외(좁은 사각) → 2x2 (정사각형)
+ *
+ * 3)을 4x2 검사보다 뒤·2x2 검사보다 앞에 두는 이유: 가로로 길지만 한 줄인
+ * (4x1 같은) 모양을 2x2 가 아니라 2x1 미니로 떨어뜨리기 위함.
+ *
+ * 임계값은 런처가 OPTION_APPWIDGET_MIN_* 로 주는 "현재 셀의 최소 dp"에 맞춰
+ * 보수적으로 잡았다(셀 1칸 ≈ 70dp, 2칸 ≈ 110dp, 4칸 ≈ 250dp 기준).
+ */
+private fun bucketForSize(widthDp: Int, heightDp: Int): WidgetBucket = when {
+    widthDp >= 220 && heightDp >= 220 -> BUCKET_4x4
+    widthDp >= 220 && heightDp >= 90  -> BUCKET_4x2
+    heightDp < 90                     -> BUCKET_2x1
+    else                              -> BUCKET_2x2
+}
+
+/**
+ * appWidgetId 의 현재 크기 옵션을 읽어 Bucket 을 결정한다.
+ * 런처가 아직 크기를 보고하지 않은 시점(추가 직후 등)이면 [fallback] 사용
+ * — fallback 은 그 Provider 의 "자연 크기"(picker 에서 고른 사이즈)다.
+ */
+private fun resolveBucket(
+    appWidgetManager: AppWidgetManager,
+    appWidgetId: Int,
+    fallback: WidgetBucket,
+): WidgetBucket {
+    val opts = runCatching { appWidgetManager.getAppWidgetOptions(appWidgetId) }.getOrNull()
+        ?: return fallback
+    val w = opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0)
+    val h = opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0)
+    return if (w > 0 && h > 0) bucketForSize(w, h) else fallback
+}
+
+/**
+ * 4개 Provider 공통 베이스.
+ *
+ * - [onUpdate]                 : 데이터/설정 변경·재부팅 시 — 현재 크기에 맞는 Bucket 으로 렌더
+ * - [onAppWidgetOptionsChanged]: 사용자가 홈화면에서 드래그 리사이즈 시 — 즉시 Bucket 전환
+ * - [onDeleted]                : per-widget 설정 정리
+ *
+ * Provider 를 4개로 나눠 둔 이유는 "picker 에서 고를 때의 초기 크기"(매니페스트
+ * receiver + xml targetCell)를 다르게 주기 위함뿐이며, 추가된 뒤의 동작은 4개 모두
+ * 동일하게 "현재 크기 → 제공 사이즈 레이아웃 자동 전환"이다.
+ *
+ * @param defaultBucket 런처가 아직 크기를 보고하지 않은 시점에 쓸 기본
+ *                       (= 그 Provider 의 자연 크기)
+ */
+abstract class BaseParkingWidgetProvider(
+    private val defaultBucket: WidgetBucket,
+) : AppWidgetProvider() {
+
+    final override fun onUpdate(
         context: Context,
         appWidgetManager: AppWidgetManager,
         appWidgetIds: IntArray,
     ) {
         appWidgetIds.forEach { id ->
-            kotlin.concurrent.thread(name = "widget-2x1-update") {
-                updateWidget(
-                    context, appWidgetManager, id,
-                    layoutId = R.layout.widget_2x1,
-                    detail = InfoDetail.ZONE_WITH_TIME,
-                )
+            kotlin.concurrent.thread(name = "widget-update-$id") {
+                val bucket = resolveBucket(appWidgetManager, id, defaultBucket)
+                updateWidget(context, appWidgetManager, id, bucket.layoutId, bucket.detail)
             }
         }
     }
 
-    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
-        appWidgetIds.forEach { SharedPrefsHelper.removeWidgetSettings(context, it) }
-    }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// 2×2 Provider — 구역 + 주차시간 + 경과
-// ══════════════════════════════════════════════════════════════════════════════
-
-class ParkingWidget2x2Provider : AppWidgetProvider() {
-    override fun onUpdate(
+    final override fun onAppWidgetOptionsChanged(
         context: Context,
         appWidgetManager: AppWidgetManager,
-        appWidgetIds: IntArray,
+        appWidgetId: Int,
+        newOptions: Bundle,
     ) {
-        appWidgetIds.forEach { id ->
-            kotlin.concurrent.thread(name = "widget-2x2-update") {
-                updateWidget(
-                    context, appWidgetManager, id,
-                    layoutId = R.layout.widget_2x2,
-                    detail = InfoDetail.ZONE_TIME_ELAPSED,
-                )
-            }
+        kotlin.concurrent.thread(name = "widget-resize-$appWidgetId") {
+            val w = newOptions.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0)
+            val h = newOptions.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0)
+            val bucket = if (w > 0 && h > 0) bucketForSize(w, h) else defaultBucket
+            updateWidget(context, appWidgetManager, appWidgetId, bucket.layoutId, bucket.detail)
         }
     }
 
-    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
+    final override fun onDeleted(context: Context, appWidgetIds: IntArray) {
         appWidgetIds.forEach { SharedPrefsHelper.removeWidgetSettings(context, it) }
     }
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// 4×2 Provider — 구역 + 주차시간 + 경과 + 주소
-// ══════════════════════════════════════════════════════════════════════════════
-
-class ParkingWidget4x2Provider : AppWidgetProvider() {
-    override fun onUpdate(
-        context: Context,
-        appWidgetManager: AppWidgetManager,
-        appWidgetIds: IntArray,
-    ) {
-        appWidgetIds.forEach { id ->
-            kotlin.concurrent.thread(name = "widget-4x2-update") {
-                updateWidget(
-                    context, appWidgetManager, id,
-                    layoutId = R.layout.widget_4x2,
-                    detail = InfoDetail.ZONE_TIME_ELAPSED_ADDR,
-                )
-            }
-        }
-    }
-
-    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
-        appWidgetIds.forEach { SharedPrefsHelper.removeWidgetSettings(context, it) }
-    }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// 4×4 Provider — 4x2와 동일 (구역 + 주차시간 + 경과 + 주소)
-// ══════════════════════════════════════════════════════════════════════════════
-
-class ParkingWidget4x4Provider : AppWidgetProvider() {
-    override fun onUpdate(
-        context: Context,
-        appWidgetManager: AppWidgetManager,
-        appWidgetIds: IntArray,
-    ) {
-        appWidgetIds.forEach { id ->
-            kotlin.concurrent.thread(name = "widget-4x4-update") {
-                updateWidget(
-                    context, appWidgetManager, id,
-                    layoutId = R.layout.widget_4x4,
-                    detail = InfoDetail.ZONE_TIME_ELAPSED_ADDR,
-                )
-            }
-        }
-    }
-
-    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
-        appWidgetIds.forEach { SharedPrefsHelper.removeWidgetSettings(context, it) }
-    }
-}
+// 4개 concrete — 차이는 오직 "추가 시 초기 크기"(매니페스트 receiver + xml targetCell)
+// 와 그때의 기본 Bucket 뿐. 추가된 뒤에는 모두 동일하게 현재 크기에 맞춰 전환된다.
+// 클래스명은 MainActivity / AndroidManifest 가 ComponentName 으로 참조하므로 유지.
+class ParkingWidget2x1Provider : BaseParkingWidgetProvider(BUCKET_2x1)
+class ParkingWidget2x2Provider : BaseParkingWidgetProvider(BUCKET_2x2)
+class ParkingWidget4x2Provider : BaseParkingWidgetProvider(BUCKET_4x2)
+class ParkingWidget4x4Provider : BaseParkingWidgetProvider(BUCKET_4x4)

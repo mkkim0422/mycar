@@ -3,7 +3,8 @@
     "allow": [
       "Bash(git log *)",
       "Read(//c/Users/minkk/.claude/projects/c--mycar/**)",
-      "Read(//c/Users/minkk/.claude/projects/c--mycar/memory/**)"
+      "Read(//c/Users/minkk/.claude/projects/c--mycar/memory/**)",
+      "Read(//c/Users/minkk/.pub-cache/**)"
     ]
   }
 }

@@ -1,10 +1,15 @@
 import 'package:app_settings/app_settings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/config/app_config.dart';
+import '../../core/services/billing_service.dart';
 import '../../core/theme/app_theme.dart';
 import 'parking_history_page.dart';
+import 'policy_page.dart';
 
 /// 블루투스 자동 감지 토글 저장 키.
 ///
@@ -44,6 +49,8 @@ class _SettingsPageState extends State<SettingsPage> {
     super.initState();
     _loadTaggedCar();
     _loadBtAutoEnabled();
+    // 상품 조회 / 영속 플래그 로드 (main 에서 이미 호출 — 멱등).
+    BillingService.instance.init();
   }
 
   /// BT 자동 감지 토글 상태를 영속 저장소에서 로드한다. 기본값 true.
@@ -58,23 +65,6 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() => _btAutoEnabled = enabled);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kBtAutoEnabledKey, enabled);
-  }
-
-  /// [DEV] BT 해제 이벤트를 강제 시뮬레이션해 정상 알림 파이프라인을 검증한다.
-  ///
-  /// 네이티브 `testMotionTrigger` 는 OS 브로드캐스트 단계만 우회해
-  /// [MotionDetectionService] 를 그대로 시작한다 — 가속도계 감지 → 주차 알림
-  /// 흐름은 실제 BT 해제와 1:1 동일.
-  Future<void> _triggerBtDisconnectTest() async {
-    try {
-      await _nativeChannel.invokeMethod<void>('testMotionTrigger');
-    } catch (e) {
-      if (!mounted) return;
-      _showSnackBar('테스트 실행 실패: $e');
-      return;
-    }
-    if (!mounted) return;
-    _showSnackBar('BT 해제 시뮬레이션 시작 — 폰을 움직이면 알림이 뜹니다');
   }
 
   /// 저장된 태깅 기기 MAC/이름을 네이티브 암호화 저장소에서 로드한다.
@@ -178,6 +168,94 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  // ── 의견 · 공유 ────────────────────────────────────────────────────────
+
+  void _openFeedbackSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppTheme.white,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => const _FeedbackSheet(),
+    );
+  }
+
+  /// 별점 주기 — 추후 출시될 Play 스토어 페이지로 연결.
+  Future<void> _openStoreForRating() async {
+    final uri = Uri.parse(AppConfig.appLandingUrl);
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && mounted) _showSnackBar('스토어를 열 수 없습니다.');
+    } catch (_) {
+      if (mounted) _showSnackBar('스토어를 열 수 없습니다.');
+    }
+  }
+
+  /// 친구에게 추천 — OS 공유 시트(카톡/메시지/기타 앱).
+  Future<void> _shareApp() async {
+    await SharePlus.instance.share(
+      ShareParams(
+        text: "주차한 위치를 사진과 구역으로 자동 기록하는 '주차기억'.\n"
+            '${AppConfig.appLandingUrl}',
+      ),
+    );
+  }
+
+  // ── 결제(광고 제거) ────────────────────────────────────────────────────
+
+  Widget _buildRemoveAdsRow() {
+    final billing = BillingService.instance;
+    return ValueListenableBuilder<bool>(
+      valueListenable: billing.adRemoved,
+      builder: (_, removed, __) {
+        if (removed) {
+          return _ActionRow(
+            icon: Icons.verified_rounded,
+            iconColor: AppTheme.tossBlue,
+            label: '광고 제거됨',
+            trailing: const Text(
+              '구매 완료',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: AppTheme.tossBlue,
+              ),
+            ),
+            onTap: () {},
+          );
+        }
+        return _ActionRow(
+          icon: Icons.block_rounded,
+          iconColor: AppTheme.tossBlue,
+          label: '광고 제거',
+          trailing: Text(
+            billing.displayPrice,
+            style: const TextStyle(
+              fontSize: AppTheme.fontBody1,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.tossBlue,
+              letterSpacing: -0.2,
+            ),
+          ),
+          onTap: _buyRemoveAds,
+        );
+      },
+    );
+  }
+
+  Future<void> _buyRemoveAds() async {
+    final billing = BillingService.instance;
+    if (billing.product == null) {
+      _showSnackBar('스토어 출시 후 이용할 수 있어요.');
+      return;
+    }
+    final started = await billing.buyRemoveAds();
+    if (!started && mounted) _showSnackBar('결제를 시작할 수 없습니다.');
+    // 성공 시 BillingService.adRemoved → 배너 자동 숨김 + 이 행 자동 갱신.
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -244,6 +322,41 @@ class _SettingsPageState extends State<SettingsPage> {
 
           const SizedBox(height: 28),
 
+          // ── 섹션: 의견 · 공유 ────────────────────────────────────────
+          _SectionHeader(label: '의견 · 공유'),
+          _SettingsCard(
+            children: [
+              _ActionRow(
+                icon: Icons.feedback_outlined,
+                iconColor: AppTheme.tossBlue,
+                label: '피드백 보내기',
+                onTap: _openFeedbackSheet,
+              ),
+              const _Divider(),
+              _ActionRow(
+                icon: Icons.star_rounded,
+                iconColor: const Color(0xFFFFB400),
+                label: '별점 주기',
+                onTap: _openStoreForRating,
+              ),
+              const _Divider(),
+              _ActionRow(
+                icon: Icons.ios_share_rounded,
+                iconColor: AppTheme.tossBlue,
+                label: '친구에게 추천',
+                onTap: _shareApp,
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 28),
+
+          // ── 섹션: 결제 ──────────────────────────────────────────────
+          _SectionHeader(label: '결제'),
+          _SettingsCard(children: [_buildRemoveAdsRow()]),
+
+          const SizedBox(height: 28),
+
           // ── 섹션 3: 앱 ─────────────────────────────────────────────────
           _SectionHeader(label: '앱'),
           _SettingsCard(
@@ -263,6 +376,43 @@ class _SettingsPageState extends State<SettingsPage> {
                 onTap: () => AppSettings.openAppSettings(
                   type: AppSettingsType.notification,
                 ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 28),
+
+          // ── 섹션: 법적 고지 ─────────────────────────────────────────
+          _SectionHeader(label: '법적 고지'),
+          _SettingsCard(
+            children: [
+              _ActionRow(
+                icon: Icons.privacy_tip_outlined,
+                iconColor: AppTheme.tossBlue,
+                label: '개인정보처리방침',
+                onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) =>
+                      const PolicyPage(doc: PolicyDocument.privacy),
+                )),
+              ),
+              const _Divider(),
+              _ActionRow(
+                icon: Icons.location_on_outlined,
+                iconColor: AppTheme.tossBlue,
+                label: '위치기반서비스 이용약관',
+                onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) =>
+                      const PolicyPage(doc: PolicyDocument.location),
+                )),
+              ),
+              const _Divider(),
+              _ActionRow(
+                icon: Icons.description_outlined,
+                iconColor: AppTheme.tossBlue,
+                label: '서비스 이용약관',
+                onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const PolicyPage(doc: PolicyDocument.terms),
+                )),
               ),
             ],
           ),
@@ -320,60 +470,6 @@ class _SettingsPageState extends State<SettingsPage> {
                   ? '이미 페어링된 기기 중 내 차를 선택하면 해당 기기의 연결 해제만 감지해 알림을 보냅니다. (신규 연결 시도 없음)'
                   : 'MAC ${_taggedCar!.address} · 태그된 기기가 해제되면 자동 필터를 건너뛰고 즉시 알림합니다.',
               style: const TextStyle(
-                fontSize: 12,
-                color: AppTheme.gray500,
-                height: 1.45,
-                letterSpacing: -0.1,
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 28),
-
-          // ── 섹션 99: 개발용 (배포 시 제거) ─────────────────────────────
-          // BT 해제 → 모션 감지 → 주차 알림 파이프라인을 차량 없이 검증한다.
-          // 정상 흐름과 동일하게 MotionDetectionService 를 시작 — OS 브로드캐스트
-          // 단계만 우회한다. 배포 빌드에서는 이 섹션과 _triggerBtDisconnectTest,
-          // 그리고 MainActivity 의 'testMotionTrigger' 핸들러를 함께 제거할 것.
-          _SectionHeader(label: '개발용 (배포 시 제거)'),
-          _SettingsCard(
-            children: [
-              InkWell(
-                onTap: _triggerBtDisconnectTest,
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(
-                      horizontal: AppTheme.spacingCard, vertical: 16),
-                  child: Row(
-                    children: [
-                      Icon(Icons.bug_report_rounded,
-                          size: 22, color: Colors.red),
-                      SizedBox(width: 14),
-                      Expanded(
-                        child: Text(
-                          'BT 해제 테스트 (개발용)',
-                          style: TextStyle(
-                            fontSize: AppTheme.fontBody1,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.red,
-                            letterSpacing: -0.2,
-                          ),
-                        ),
-                      ),
-                      Icon(Icons.chevron_right_rounded,
-                          size: 20, color: Colors.red),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 4),
-            child: Text(
-              '실제 BT 해제와 동일한 흐름으로 모션 감지 서비스를 시작합니다. '
-              '폰을 움직이거나 약 2분 후 주차 알림이 발송됩니다.',
-              style: TextStyle(
                 fontSize: 12,
                 color: AppTheme.gray500,
                 height: 1.45,
@@ -773,6 +869,192 @@ class _Divider extends StatelessWidget {
     return const Padding(
       padding: EdgeInsets.only(left: 60), // 아이콘 너비(22) + 간격(14) + 좌패딩(24)
       child: Divider(height: 1, thickness: 0.5, color: AppTheme.gray200),
+    );
+  }
+}
+
+// ── 피드백 입력 시트 ──────────────────────────────────────────────────────────
+
+/// 슬라이드 업 시트. 작성 내용을 mailto 로 [AppConfig.feedbackEmail] 에 전송한다.
+class _FeedbackSheet extends StatefulWidget {
+  const _FeedbackSheet();
+
+  @override
+  State<_FeedbackSheet> createState() => _FeedbackSheetState();
+}
+
+class _FeedbackSheetState extends State<_FeedbackSheet> {
+  final _controller = TextEditingController();
+  bool _sending = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  /// mailto query 인코딩 헬퍼.
+  ///
+  /// 명세 v? — `Uri.encodeQueryComponent` 는 공백을 `+` 로 변환해 일부 메일
+  /// 앱(아웃룩/일부 안드로이드 메일 앱)이 본문에 `+` 를 그대로 표시한다.
+  /// `Uri.encodeComponent` 는 공백을 `%20` 으로 변환해 mailto RFC 6068 표준에
+  /// 부합. 제목/본문이 정상 텍스트로 들어간다.
+  static String _encodeQuery(Map<String, String> params) => params.entries
+      .map((e) =>
+          '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}')
+      .join('&');
+
+  Future<void> _send() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('의견을 입력해주세요.')),
+      );
+      return;
+    }
+    setState(() => _sending = true);
+
+    final uri = Uri(
+      scheme: 'mailto',
+      path: AppConfig.feedbackEmail,
+      query: _encodeQuery({'subject': '[주차기억] 의견', 'body': text}),
+    );
+
+    bool launched;
+    try {
+      launched = await launchUrl(uri);
+    } catch (_) {
+      launched = false;
+    }
+
+    if (!mounted) return;
+    setState(() => _sending = false);
+
+    final messenger = ScaffoldMessenger.of(context);
+    if (launched) {
+      Navigator.of(context).pop();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('소중한 의견 감사합니다!')),
+      );
+    } else {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('메일 앱을 열 수 없습니다.')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 12, 20, 20 + bottomInset),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              width: 36,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                color: AppTheme.gray200,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const Text(
+            '피드백 보내기',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.gray900,
+              letterSpacing: -0.3,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            '실생활에서 "이런 앱 있으면 좋겠다" 싶은 아이디어나, 지금 이 앱에서 '
+            '불편하거나 개선했으면 하는 점을 편하게 보내주세요. 보내주신 의견은 '
+            '직접 검토해 앱에 반영해 드릴게요.',
+            style: TextStyle(
+              fontSize: 13,
+              color: AppTheme.gray500,
+              height: 1.5,
+              letterSpacing: -0.1,
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _controller,
+            minLines: 4,
+            maxLines: 8,
+            textInputAction: TextInputAction.newline,
+            // 실제 입력 글씨 — 검정. 명시 안 하면 다크 테마 등에서 흰색이 나와
+            // 흰 fillColor 와 충돌해 안 보이는 사고가 난다.
+            style: const TextStyle(
+              fontSize: 15,
+              color: AppTheme.gray900,
+              height: 1.5,
+            ),
+            decoration: InputDecoration(
+              hintText: '의견을 입력해주세요',
+              // 플레이스홀더 — 회색. style 과 분리해 명시.
+              hintStyle: const TextStyle(
+                fontSize: 15,
+                color: AppTheme.gray500,
+                height: 1.5,
+              ),
+              filled: true,
+              fillColor: const Color(0xFFF7F9FC),
+              contentPadding: const EdgeInsets.all(14),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Color(0xFFE5E8EB)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Color(0xFFE5E8EB)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppTheme.tossBlue),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          GestureDetector(
+            onTap: _sending ? null : _send,
+            child: Container(
+              height: AppTheme.btnPrimary,
+              decoration: BoxDecoration(
+                color: _sending ? AppTheme.gray200 : AppTheme.tossBlue,
+                borderRadius: BorderRadius.circular(AppTheme.radiusButton),
+              ),
+              alignment: Alignment.center,
+              child: _sending
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor:
+                            AlwaysStoppedAnimation<Color>(AppTheme.white),
+                      ),
+                    )
+                  : const Text(
+                      '의견보내기',
+                      style: TextStyle(
+                        fontSize: AppTheme.fontBody1,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.white,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

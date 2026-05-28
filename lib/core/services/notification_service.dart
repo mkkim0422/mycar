@@ -89,6 +89,8 @@ class NotificationService {
       importance: Importance.high,
       priority: Priority.high,
       ticker: '주차 위치를 기록하세요',
+      channelShowBadge: false,
+      number: 0,
     );
 
     const details = NotificationDetails(android: androidDetails);

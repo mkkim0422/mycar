@@ -10,6 +10,9 @@ build/
 # Android 관련
 .gradle/
 local.properties
+# 릴리스 업로드 키 비밀번호 — 절대 커밋 금지
+key.properties
+android/key.properties
 *.keystore
 *.jks
 *.ap_

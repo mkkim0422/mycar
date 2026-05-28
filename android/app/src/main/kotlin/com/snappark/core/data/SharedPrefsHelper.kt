@@ -43,6 +43,24 @@ object SharedPrefsHelper {
      */
     private const val KEY_BT_AUTO_ENABLED = "${KEY_PREFIX}bt_auto_enabled"
 
+    /**
+     * 주차 알림 라치(latch) 상태 — native-only 키.
+     *
+     * 시맨틱: "현재 BT 끊김 사이클에서 알림이 이미 발사되었는가?"
+     *   - true  → 다음 알림은 차량 ACL_CONNECTED 가 라치를 풀 때까지 발사 금지
+     *   - false → 다음 ACL_DISCONNECTED 시 알림 발사 가능
+     *
+     * 시간 기반 쿨다운이 아니라 **BT 연결 이벤트 기반**으로 풀린다. 이유:
+     *   - 본 앱의 의도된 동작은 "BT 끊김 사이클당 알림 1회".
+     *   - 시간 쿨다운(예: 3분)은 그 시간이 지난 뒤 들어오는 가짜 ACL_DISCONNECTED
+     *     (자동 필터 오인식, BT 모듈 지연 플리커)를 못 막는다.
+     *   - 차량 ACL_CONNECTED 가 한 번 발생해야 "사용자가 다시 차에 탔다 = 새 주차
+     *     사이클" 로 간주되어 라치가 풀린다.
+     *
+     * Flutter 측에서 건드리지 않도록 `native.` 접두사를 사용한다.
+     */
+    private const val KEY_PARKING_NOTIFICATION_LATCHED = "native.parking_notification_latched"
+
     // 수동 태깅된 차량 BT MAC 은 이 파일이 아닌 [SecurePrefsHelper] (암호화 저장소)
     // 에서 관리한다. AndroidKeyStore 마스터 키로 보호되며, 레거시 평문 키는
     // MainActivity.onCreate 에서 SecurePrefsHelper.migrateFromLegacy() 가 이관/삭제.
@@ -120,6 +138,48 @@ object SharedPrefsHelper {
      */
     fun isBtAutoEnabled(context: Context): Boolean =
         prefs(context).getBoolean(KEY_BT_AUTO_ENABLED, true)
+
+    // ── 주차 알림 라치 (BT 사이클당 1회 발사 보장) ───────────────────────────
+    //   호출 컨텍스트:
+    //     - [BluetoothDisconnectReceiver.showNotificationDirectly] (서비스 시작 실패 폴백)
+    //     - [MotionDetectionService.fireParkingNotification] (motion / max_timeout / no_sensor)
+    //     - [BluetoothDisconnectReceiver] ACL_CONNECTED (차량 디바이스에 한해 라치 해제)
+    //   모든 경로가 같은 키를 공유하므로 우회로가 없다.
+
+    /**
+     * 현재 라치가 걸려있지 않으면 true (= 알림 발사 가능).
+     *
+     * - 첫 설치/키 미존재: 기본 false → 반환 true (정상 첫 알림 통과)
+     * - 한 번 발사 후 ACL_CONNECTED(차량) 가 들어오기 전까지는 false 반환 →
+     *   몇 분 뒤든, 몇 시간 뒤든, 어떤 가짜 ACL_DISCONNECTED 가 들어와도 차단.
+     */
+    fun shouldFireParkingNotification(context: Context): Boolean =
+        !prefs(context).getBoolean(KEY_PARKING_NOTIFICATION_LATCHED, false)
+
+    /**
+     * 알림 발사 직후 호출 — 다음 차량 ACL_CONNECTED 까지 모든 추가 발사를 잠근다.
+     *
+     * 디스크 I/O 는 [apply] 로 비동기 처리해 BroadcastReceiver 본문이나
+     * 서비스 메인 스레드를 블로킹하지 않는다.
+     */
+    fun markParkingNotificationFired(context: Context) {
+        prefs(context).edit()
+            .putBoolean(KEY_PARKING_NOTIFICATION_LATCHED, true)
+            .apply()
+    }
+
+    /**
+     * 라치를 해제한다. **차량 디바이스의 ACL_CONNECTED** 이벤트에서만 호출되어야
+     * 한다 (= 사용자가 다시 차에 탔다 = 새 주차 사이클 시작).
+     *
+     * 이어폰·워치 등 비차량 ACL_CONNECTED 에서 호출하면 안 된다. 그러면 가설 A
+     * (자동 필터 오인식)가 다시 살아난다.
+     */
+    fun clearParkingNotificationLatch(context: Context) {
+        prefs(context).edit()
+            .putBoolean(KEY_PARKING_NOTIFICATION_LATCHED, false)
+            .apply()
+    }
 
 
     /**

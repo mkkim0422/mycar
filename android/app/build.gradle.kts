@@ -1,9 +1,32 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
     // Flutter Gradle Plugin은 Android/Kotlin 플러그인 이후에 적용해야 한다.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+// ── 릴리스 업로드 키 (Play 앱 서명) ──────────────────────────────────────────
+// android/key.properties 가 있으면 그 값으로 release 를 서명한다(스토어 업로드용).
+// 파일이 없으면(개발 PC·CI) release 도 debug 키로 폴백 → flutter run --release 정상.
+// key.properties 와 *.jks 는 .gitignore 로 커밋 차단됨(비밀번호 노출 방지).
+val keystorePropertiesFile = rootProject.file("key.properties")
+val hasUploadKey = keystorePropertiesFile.exists()
+val keystoreProperties = Properties().apply {
+    if (hasUploadKey) load(FileInputStream(keystorePropertiesFile))
+}
+
+// ── AdMob 앱 ID ──────────────────────────────────────────────────────────────
+// 단일 소스: 여기 2개 상수 → manifestPlaceholders → AndroidManifest 의 ${admobAppId}.
+// debug 는 Google 공식 테스트 앱 ID(정책상 안전), release 는 실제 앱 ID 를 써야 한다.
+// 실제 앱 ID 발급 전까지 크래시 방지를 위해 release 도 테스트 앱 ID 로 둔다.
+// 실제 광고 노출 자체는 AppConfig.admobRealBannerUnitId 가 설정될 때까지
+// (Dart 측에서) 배너를 숨겨 차단하므로, 테스트 광고가 운영 배포로 나가지 않는다.
+val admobTestAppId = "ca-app-pub-3940256099942544~3347511713" // 공식 테스트 — 변경 금지
+// TODO(릴리스 전): AdMob 콘솔에서 com.snappark 용 실제 앱 ID 발급 후 아래를 교체.
+val admobRealAppId = admobTestAppId
 
 android {
     namespace = "com.snappark"
@@ -31,12 +54,36 @@ android {
 
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // 안전 기본값: 테스트 앱 ID. 명시 override 없는 buildType(=debug)은
+        // 자동으로 테스트 광고로 떨어진다. release 는 아래에서 override.
+        manifestPlaceholders["admobAppId"] = admobTestAppId
+    }
+
+    signingConfigs {
+        // 업로드 키스토어(key.properties)가 있을 때만 release 서명을 구성한다.
+        if (hasUploadKey) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
     }
 
     buildTypes {
         release {
-            // 배포 시 별도 서명 설정 필요. 현재는 디버그 키로 flutter run --release 동작.
-            signingConfig = signingConfigs.getByName("debug")
+            // buildType 별 AdMob 앱 ID 주입(테스트/실제 구조적 분리).
+            manifestPlaceholders["admobAppId"] = admobRealAppId
+
+            // key.properties 있으면 업로드 키로 서명(Play 업로드 가능),
+            // 없으면 debug 키 폴백(로컬/CI 에서 release 빌드가 깨지지 않게).
+            signingConfig = if (hasUploadKey) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
 
             // 릴리스 빌드 디버그 비활성화
             isDebuggable = false

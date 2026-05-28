@@ -1,0 +1,19 @@
+# SnapPark V2 — Flutter 정적 분석 설정.
+#
+# `flutter analyze` 와 IDE 진단이 모두 이 파일을 따른다.
+#
+# ── lint preset 정책 ─────────────────────────────────────────────────────────
+# `package:flutter_lints/flutter.yaml` 을 의도적으로 include 하지 않는다.
+# 그 preset 을 켜면 기존 코드(home_page, settings_page 등) 에 25건 이상의
+# info-level 스타일 issue 가 한꺼번에 표출돼, 본 작업 범위(BT 라치 + OCR)
+# 와 무관한 변경 요구가 발생한다. 향후 코드 정리 사이클에서 한 번에 적용한다.
+
+analyzer:
+  exclude:
+    # 자동 생성물
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    # 설계 참조 자료 — 빌드에 포함되지 않으며, 자체 deprecation·typo 가 있어도
+    # 본 프로젝트의 정상 빌드에는 무관하다. 새 OCR 카메라 구현
+    # (lib/core/services/mlkit_ocr_service.dart 등) 의 설계 출처로 보관한다.
+    - "docs/**"

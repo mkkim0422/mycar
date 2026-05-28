@@ -54,10 +54,16 @@ class LocationService {
   static const double _targetAccuracyMeters = 20;
 
   /// 절대 폐기 임계치. 윈도우 만료 시에도 best 가 이 값보다 나쁘면
-  /// "위치 못 찾음" 으로 처리해 마커를 찍지 않는다 — 50m 초과 fix 는 옆
-  /// 도로/건물 단위로 어긋나 사용자에게 *틀린* 위치를 보여주는 게
-  /// 위치 미표시보다 훨씬 큰 혼란을 일으킨다.
-  static const double _maxAcceptableAccuracy = 50;
+  /// "위치 못 찾음" 으로 처리한다.
+  ///
+  /// ## 50m → 200m 완화 사유 (실내 주차장 지원)
+  /// 지하·실내 주차장은 GPS 신호가 약해 Fused 가 WiFi/셀룰러 기반 fix 를
+  /// 50~150m 정확도로 내놓는 경우가 흔하다. 50m 컷이면 이 fix 들이 모두
+  /// 폐기되어 좌표 자체가 null 로 저장 → 홈 화면의 네이버 지도 버튼·주소 라인이
+  /// 사라지는 회귀가 발생했다. 200m 까지 허용하면 "도로명 정확도" 는 손해 보지만
+  /// "지도 위 대략적인 위치" 는 확보되어 차량 회수에 충분히 도움이 된다.
+  /// (네이버 지도 마커 + 사용자 시각 인지로 보정 가능)
+  static const double _maxAcceptableAccuracy = 200;
 
   /// lastKnownPosition 즉시 수용 기준.
   /// - 30초 이내 (그 이상이면 차량 이동·실내 진입 등 stale 가능성)

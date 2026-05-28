@@ -74,6 +74,74 @@ class ParkingRepository {
     }
   }
 
+  /// 특정 기록의 위치 정보(좌표·주소) 만 업데이트한다.
+  ///
+  /// ## 사용 시나리오
+  /// 카메라 저장 흐름이 GPS 수렴을 기다리지 않고 즉시 끝난 뒤, 백그라운드에서
+  /// `LocationService.fetchCurrent()` 가 좌표/주소를 확보하면 이 메서드로 동일
+  /// 레코드(timestamp 일치) 의 위치 필드만 갱신한다.
+  ///
+  /// ## 매칭 규칙
+  /// `timestamp` 가 정확히 일치하는 레코드를 찾아 `copyWith` 로 좌표·주소를
+  /// 덮어쓴다. `floor`/`zone`/`photoPath` 등 사용자 입력은 보존된다.
+  /// 매칭 레코드가 없으면 (이미 삭제됨 등) no-op 으로 조용히 종료한다.
+  ///
+  /// 갱신 대상이 `parking_data`(최신 1건) 와 동일하면 그 키도 함께 갱신해
+  /// 홈 화면·네이티브 위젯이 즉시 새 값으로 보이게 한다.
+  Future<void> updateLocation({
+    required DateTime timestamp,
+    double? latitude,
+    double? longitude,
+    String? address,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final history = await _loadHistory(prefs);
+
+      var updatedIndex = -1;
+      for (var i = 0; i < history.length; i++) {
+        final entry = history[i];
+        if (entry is! Map<String, dynamic>) continue;
+        final parsed = ParkingData.fromJson(entry);
+        if (parsed.timestamp == timestamp) {
+          history[i] = parsed
+              .copyWith(
+                latitude: latitude,
+                longitude: longitude,
+                address: address,
+              )
+              .toJson();
+          updatedIndex = i;
+          break;
+        }
+      }
+
+      if (updatedIndex < 0) {
+        debugPrint(
+          '[ParkingRepository] updateLocation: '
+          'timestamp ${timestamp.toIso8601String()} not found',
+        );
+        return;
+      }
+
+      await prefs.setString(_kParkingHistoryKey, jsonEncode(history));
+
+      // 최신 레코드(parking_data) 와 동일하면 함께 갱신 — 홈/위젯에 즉시 반영.
+      if (updatedIndex == 0) {
+        await prefs.setString(_kParkingDataKey, jsonEncode(history.first));
+      }
+    } catch (e) {
+      debugPrint('[ParkingRepository] updateLocation 실패: $e');
+      return;
+    }
+
+    try {
+      await _widgetChannel.invokeMethod<void>('refreshWidget');
+    } catch (e) {
+      debugPrint('[ParkingRepository] 위젯 갱신 실패: $e');
+    }
+  }
+
   /// 특정 인덱스의 기록들을 삭제한다.
   /// 삭제 후 최신 기록을 `parking_data`에 갱신한다.
   Future<void> deleteAt(Set<int> indices) async {

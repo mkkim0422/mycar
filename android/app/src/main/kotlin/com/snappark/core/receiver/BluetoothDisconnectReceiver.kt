@@ -63,6 +63,17 @@ class BluetoothDisconnectReceiver : BroadcastReceiver() {
             BluetoothDevice.ACTION_ACL_CONNECTED -> {
                 Log.d("SnapPark", "BT connected: ${device?.name} → 서비스 취소")
                 runCatching { context.stopService(Intent(context, MotionDetectionService::class.java)) }
+
+                // ── 차량 디바이스 재연결 → 알림 라치 해제 (새 주차 사이클 시작) ──
+                //    "끊김 사이클당 알림 1회" 보장의 핵심: 라치는 시간이 아니라
+                //    **차량 ACL_CONNECTED** 로만 풀린다. 비차량(이어폰·워치 등) 이
+                //    풀면 그 직후 같은 기기의 끊김이 가설 A(자동 필터 오인식)로
+                //    알림을 발사할 수 있다. stopService 는 BT flicker 흡수용으로
+                //    유지하되, 라치 해제는 isCarDevice 통과 시에만 수행.
+                if (device != null && isCarDevice(context, device)) {
+                    SharedPrefsHelper.clearParkingNotificationLatch(context)
+                    Log.d("SnapPark", "차량 재연결 → 알림 라치 해제")
+                }
                 return
             }
 
@@ -108,6 +119,15 @@ class BluetoothDisconnectReceiver : BroadcastReceiver() {
     // ── 레거시 폴백: 서비스 없이 즉시 알림 ──────────────────────────────────
 
     private fun showNotificationDirectly(context: Context) {
+        // 모든 알림 경로가 거치는 단일 dedupe 가드. 서비스 측 fireParkingNotification 과
+        // 동일한 키·쿨다운을 공유하므로, 폴백이 발사된 직후 서비스가 정상 시작되어
+        // 또 한 번 발사 시도해도 차단된다 (그 반대도 성립).
+        if (!SharedPrefsHelper.shouldFireParkingNotification(context)) {
+            Log.i("SnapPark", "parking notification suppressed (cooldown, reason=receiver_fallback)")
+            return
+        }
+        Log.i("SnapPark", "parking notification firing (reason=receiver_fallback)")
+
         createNotificationChannelIfNeeded(context)
 
         val launchIntent = Intent(context, MainActivity::class.java).apply {
@@ -129,22 +149,30 @@ class BluetoothDisconnectReceiver : BroadcastReceiver() {
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .setVibrate(longArrayOf(0, 250, 100, 250))
+            .setBadgeIconType(NotificationCompat.BADGE_ICON_NONE)
+            .setNumber(0)
             .build()
 
         runCatching {
             NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
         }
+        // notify 예외 여부와 무관하게 시도 자체를 기록 — 짧은 재시도 폭주를 막는다.
+        SharedPrefsHelper.markParkingNotificationFired(context)
     }
 
     /**
      * 연결 해제된 기기가 **차량 블루투스**인지 포괄적으로 판별한다.
      *
-     * ## 설계 원칙 (수동 태깅 최우선 → 자동 필터)
-     * 0. **수동 태깅 바이패스** — 사용자가 설정에서 '내 차'로 태깅한 MAC 과 일치하면
-     *    자동 필터(1~7)를 전부 건너뛰고 즉시 true.
-     *    ※ 태깅은 OS 이벤트 필터링 힌트일 뿐이며, 새로운 BT 연결/스캔을 시도하지 않는다.
-     * 1. **이어폰 차단 우선** — 이름·클래스 블록리스트로 개인 오디오 기기 제외
-     * 2. **차량 신호 포괄 수용** — 블록리스트를 통과한 기기는 다음 신호 중 하나면 차량
+     * ## 설계 원칙 (수동 태깅 = exclusive 모드, 미태깅 = 자동 필터)
+     * 0. **수동 태깅 모드 (exclusive)** — 사용자가 '내 차' 로 태깅한 기기가 있으면
+     *    *그 기기의 MAC 과 일치할 때만* true, 그 외는 모두 false.
+     *    설정 화면 안내 문구가 약속하는 동작: "해당 기기의 연결 해제만 감지".
+     *    ※ 태깅은 OS 이벤트 필터링 힌트일 뿐, 새로운 BT 연결/스캔은 시도하지 않는다.
+     *    ※ MAC 은 AndroidKeyStore 로 보호되는 SecurePrefsHelper 에서 복호화 조회.
+     * 1. **(태깅 없을 때만) 이어폰 차단 우선** — 이름·클래스 블록리스트로 개인
+     *    오디오 기기 제외
+     * 2. **(태깅 없을 때만) 차량 신호 포괄 수용** — 블록리스트를 통과한 기기는
+     *    다음 신호 중 하나면 차량
      *    - CAR_AUDIO 클래스 (확정)
      *    - HANDSFREE 클래스 (이어폰은 이미 위 단계에서 제거됨 → 핸즈프리 카 킷으로 간주)
      *    - 국산/해외 차량 브랜드·인포테인먼트 시스템 이름 키워드
@@ -154,18 +182,20 @@ class BluetoothDisconnectReceiver : BroadcastReceiver() {
      */
     @Suppress("DEPRECATION")
     private fun isCarDevice(context: Context, device: BluetoothDevice): Boolean {
-        // ── 0) 수동 태깅 바이패스 (최우선) ──────────────────────────────
-        //    사용자가 설정 > '알림이 오지 않나요?' 에서 선택한 기기의 MAC 과 일치하면
-        //    자동 판별 로직을 건너뛰고 즉시 차량으로 간주한다.
-        //    ※ BT 연결 시도/스캔 없음 — OS 가 쏜 이벤트의 기기 주소를 비교만 한다.
-        //    ※ MAC 은 AndroidKeyStore 로 보호되는 SecurePrefsHelper 에서 복호화 조회.
+        // ── 0) 수동 태깅 모드 (exclusive) ──────────────────────────────
+        //    태깅된 MAC 이 존재하면 그 기기와의 정확 일치 여부만 판단한다.
+        //    설정 UI 의 안내 문구("해당 기기의 연결 해제만 감지") 와 일치시키기 위해
+        //    *불일치 시 자동 필터로 폴백하지 않는다*. 즉 태깅 후에는 다른 차량
+        //    기기(렌터카, 지인 차 등) 가 해제돼도 알림이 발송되지 않는다.
         val manualCarId = SecurePrefsHelper.getManualCarId(context)
         if (manualCarId != null) {
             val deviceAddr = runCatching { device.address?.uppercase() }.getOrNull()
-            if (deviceAddr != null && deviceAddr == manualCarId) {
-                Log.d("SnapPark", "수동 태깅 기기 일치 → 자동 필터 바이패스")
-                return true
-            }
+            val matches = deviceAddr != null && deviceAddr == manualCarId
+            Log.d(
+                "SnapPark",
+                "수동 태깅 모드: 일치=$matches (event=${device.address}, tagged=$manualCarId)",
+            )
+            return matches
         }
 
         val btClass = runCatching { device.bluetoothClass }.getOrNull()
@@ -283,6 +313,7 @@ class BluetoothDisconnectReceiver : BroadcastReceiver() {
             description = "블루투스 연결 해제 시 주차 위치 기록을 유도하는 알림"
             enableVibration(true)
             vibrationPattern = longArrayOf(0, 250, 100, 250)
+            setShowBadge(false)
         }
 
         (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)

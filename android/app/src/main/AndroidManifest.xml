@@ -43,7 +43,7 @@
         android:required="false" />
 
     <application
-        android:label="내차어디"
+        android:label="주차기억"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:enableOnBackInvokedCallback="true"
@@ -160,6 +160,28 @@
                 android:resource="@xml/parking_widget_info_4x4" />
         </receiver>
 
+        <!--
+            ── AdMob 앱 ID ─────────────────────────────────────────────────
+            buildType 별 주입 (debug=테스트, release=실제).
+            값은 android/app/build.gradle.kts 의 manifestPlaceholders 단일소스에서
+            파생되므로 여기 하드코딩 금지.
+        -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="${admobAppId}" />
+
+        <!--
+            ── ML Kit OCR 모델 자동 다운로드 ────────────────────────────────
+            google_mlkit_text_recognition (Korean script) 가 처음 호출될 때
+            Google Play Services 가 Korean OCR 모델을 백그라운드로 다운로드한다.
+            이 메타데이터가 누락되면 첫 호출 시 모델 부재로 인식 실패.
+            (네이티브 라이브러리 `text-recognition-korean:16.0.1` 는 app/build.gradle.kts
+            에 이미 명시되어 있어 클래스 로딩은 보장된다.)
+        -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="ocr_korean" />
+
         <!-- Flutter 임베딩 버전 -->
         <meta-data
             android:name="flutterEmbedding"
@@ -180,6 +202,11 @@
             <action android:name="android.intent.action.VIEW" />
             <category android:name="android.intent.category.BROWSABLE" />
             <data android:scheme="https" />
+        </intent>
+        <!-- 피드백 "의견보내기": mailto 메일 앱 가시성 (Android 11+) -->
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="mailto" />
         </intent>
     </queries>
 </manifest>
