@@ -77,36 +77,33 @@ Future<void> _handleCameraResultAndReload(
   if (cb != null) await cb();
 }
 
-/// AdMob 초기화 전 GDPR(UMP) 동의 폼을 비동기로 처리하고, 동의 결과와
-/// 무관하게 SDK 를 초기화한다. 콘텐츠 등급은 PG(Parental Guidance, 가족용)
-/// 로 고정해 부적절한 광고 노출 위험을 낮춘다.
+/// AdMob SDK 초기화 + UMP(GDPR) 동의 폼 표시.
+///
+/// 두 작업은 **반드시 병렬**로 실행한다. UMP 응답을 기다려서 initialize 를
+/// 호출하면 AdBanner 가 SDK 초기화 전에 load 를 시도해 실패 → 배너가 안 보임.
+/// UMP 는 광고 SDK 가 내부적으로 동의 상태를 참조해 개인화/비개인화를 결정하므로
+/// 별도 await 불필요.
 Future<void> _initAdsWithConsent() async {
+  // 1) SDK 초기화 — 즉시 시작(비차단). 완료 후 콘텐츠 등급(PG) 적용.
+  unawaited(MobileAds.instance.initialize().then((_) async {
+    try {
+      await MobileAds.instance.updateRequestConfiguration(
+        RequestConfiguration(maxAdContentRating: MaxAdContentRating.pg),
+      );
+    } catch (_) {}
+  }));
+
+  // 2) UMP 동의 — EEA/UK/스위스 외 지역은 NOT_REQUIRED 로 즉시 no-op.
+  //    오류·예외 모두 무시(광고 송출에 영향 없음).
   try {
-    final completer = Completer<void>();
     ConsentInformation.instance.requestConsentInfoUpdate(
       ConsentRequestParameters(),
       () async {
         try {
           await ConsentForm.loadAndShowConsentFormIfRequired((_) {});
         } catch (_) {}
-        if (!completer.isCompleted) completer.complete();
       },
-      (FormError _) {
-        if (!completer.isCompleted) completer.complete();
-      },
-    );
-    await completer.future.timeout(
-      const Duration(seconds: 3),
-      onTimeout: () {}, // 동의 서비스 응답 지연 → 광고 초기화로 진행
-    );
-  } catch (_) {
-    // 어떠한 동의 처리 오류도 광고 초기화를 막지 않는다.
-  }
-  try {
-    await MobileAds.instance.initialize();
-    // 콘텐츠 등급: G(전체) / PG / T / MA. 주차 유틸리티 앱 특성상 보수적으로 PG.
-    await MobileAds.instance.updateRequestConfiguration(
-      RequestConfiguration(maxAdContentRating: MaxAdContentRating.pg),
+      (FormError _) {},
     );
   } catch (_) {}
 }
