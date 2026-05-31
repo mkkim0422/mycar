@@ -13,6 +13,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.snappark.MainActivity
+import com.snappark.R
 import com.snappark.core.data.SecurePrefsHelper
 import com.snappark.core.data.SharedPrefsHelper
 import com.snappark.core.service.MotionDetectionService
@@ -140,7 +141,7 @@ class BluetoothDisconnectReceiver : BroadcastReceiver() {
         )
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_map)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("🚗 주차하셨나요?")
             .setContentText("📸 위치를 기록해두세요!")
             .setPriority(NotificationCompat.PRIORITY_HIGH)

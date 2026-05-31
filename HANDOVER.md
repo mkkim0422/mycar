@@ -71,7 +71,7 @@
 - 최신 주차 기록: 사진 카드 + 구역 + 시간 + 경과시간 + 네이버 지도 바로가기
 - 빈 상태: 안내 문구 + 주차 등록 CTA
 - 전체화면 사진 뷰어 (핀치줌, FadeTransition)
-- 카카오톡 공유 버튼 (AppConfig.isKakaoConfigured 가드)
+- 공유 버튼 (구역 텍스트 라인 우측, OS 표준 공유 시트 — share_plus)
 
 ### 2.6 주차기록 보기 (parking_history_page.dart — 363줄)
 - 전체 주차 기록 리스트 (최신순)
@@ -193,7 +193,7 @@ main()
 | 클라우드 백업 차단 | `android:fullBackupContent="false"` | AndroidManifest.xml |
 | HTTP 평문 통신 차단 | `android:usesCleartextTraffic="false"` | AndroidManifest.xml |
 | ProGuard 커스텀 규칙 | 60줄 (Native 클래스 보존 등) | proguard-rules.pro |
-| 카카오 API 키 가드 | `isKakaoConfigured` 체크 | app_config.dart |
+| 공유 이미지 합성 | 사진 + 글래스 캡션 PNG → ACTION_SEND (kakao SDK 미사용) | kakao_share_service.dart |
 | 사진 Isolate 처리 | `compute(_copyFileInIsolate)` | camera_screen.dart |
 
 ### 5.2 보안 감사 결과 (전수 검사)
@@ -299,6 +299,83 @@ main()
 | Dart→Native | `pinWidget` | `{size, style?}` | 홈 화면 위젯 고정 요청 |
 | Dart→Native | `testMotionTrigger` | 없음 | 모션 감지 서비스 수동 시작 (QA) |
 | Native→Dart | `onPayload` | String | `"go_home"` or `"open_camera"` |
+
+---
+
+## 11. Play Store 출시 진행 상태 (2026-05-31 기준)
+
+### ✅ 완료
+1. **AdMob 실 ID 적용 + UMP 동의 흐름 + MaxAdContentRating.pg** (commit 0502100, 574ce3a)
+2. **공유 기능 최종 형태**:
+   - 카카오 SDK 제거 → `share_plus` (Intent.ACTION_SEND) 로 전환
+   - 사진 + 텍스트 통합: 사진 하단에 iOS 글래스모피즘 캡션 카드(`ImageFilter.blur`) 합성한 PNG 한 장 전송
+   - 공유 버튼은 사진 위 오버레이가 아닌 **구역 텍스트 라인 우측 ghost 아이콘** 배치 (사진 탭 충돌 방지)
+   - `kakao_share_service.dart` 클래스명은 호출부 호환을 위해 유지, 내부 구현만 share_plus
+3. **약관 정비**: 책임자 → "운영자" + `mkkim850422@gmail.com`. sphinfo 이메일 약관에서 전부 제거. "회사" → "운영자" 일괄
+4. **알림 아이콘**: `drawable/ic_notification.xml` 신규 (Material `local_parking` 흰색 단색 실루엣). Dart + Native 3곳 동시 교체. R8 minify 통과 확인
+5. **업로드 서명키 생성**: alias=upload, validity 25년. `build.gradle.kts` 의 `signingConfigs.release.storeFile` 은 `rootProject.file(...)` 사용 (android/ 폴더 기준)
+6. **release AAB 빌드**: `build/app/outputs/bundle/release/app-release.aab` (72.1MB)
+   - 업로드 인증서 SHA-1: `40:DB:5B:EC:48:A4:98:1A:9B:20:D6:63:39:59:0D:0D:AE:00:DF:5E`
+   - 업로드 인증서 SHA-256: `A7:B6:38:5E:5D:54:FF:B6:69:3A:8E:21:DE:EA:D0:FA:36:B7:86:BC:19:FC:3C:23:C3:D2:63:B4:03:89:20:16`
+
+### ⏭️ 남은 작업 (Play Console 웹에서 수동)
+1. Play Console 접속 → 앱 등록 (`com.snappark`)
+2. AAB 업로드
+3. 메타데이터: 스크린샷·앱 설명·앱 아이콘·카테고리 등
+4. 인앱상품 `remove_ads` 비소비성 ₩1,900 등록
+5. 개인정보처리방침 호스팅 URL (GitHub Gist 추천) → Play Console 에 URL 입력
+6. 심사 제출
+
+---
+
+## 12. 다른 PC 에서 이어가기 (Setup 가이드)
+
+### ⚠️ 깃으로 안 옮겨지는 파일들 (gitignored — 수동 복사 필수)
+| 파일 | 경로 | 내용 | 분실 영향 |
+|------|------|------|----------|
+| `app_config.dart` | `lib/core/config/app_config.dart` | AdMob 실 배너 ID + Kakao REST API 키 | 광고 미노출 / 역지오코딩 폴백 |
+| `snappark-upload.jks` | `android/snappark-upload.jks` | **업로드 서명키** | **앱 업데이트 영구 불가** |
+| `key.properties` | `android/key.properties` | 서명키 비밀번호 평문 | 위와 같음 |
+
+→ 위 3개 파일은 **반드시 USB/클라우드(개인 Google Drive 등) 로 직접 옮겨야** 한다. 깃에 안 올라간다.
+
+### Setup 절차
+
+```
+1. 새 PC 에 도구 설치
+   - Flutter SDK (3.x 이상, 현재 PC 와 동일 버전 권장)
+   - Android Studio (JDK + Android SDK + keytool 포함)
+   - Java 17 (Android Studio 의 jbr 사용)
+   - Git
+
+2. 저장소 클론
+   git clone https://github.com/mkkim0422/mycar.git
+   cd mycar
+
+3. 위 gitignored 3개 파일 복사 붙여넣기
+   - lib/core/config/app_config.dart
+   - android/snappark-upload.jks
+   - android/key.properties
+
+4. 의존성 설치
+   flutter pub get
+
+5. 검증 빌드 (release)
+   flutter build appbundle --release
+   → build/app/outputs/bundle/release/app-release.aab 생성되면 정상
+
+6. (선택) 서명 검증
+   cd android
+   ./gradlew.bat signingReport
+   → release variant SHA-1 이 위 문서의 fingerprint 와 일치하는지 확인
+```
+
+### 다음 작업 진입점
+**Play Console 업로드** — 위 §11 의 "남은 작업" 1~6 단계 진행. 코드 변경 없음, Play Console 웹에서만.
+
+### 다음 세션의 Claude 에게
+- `MEMORY.md` 의 `[project-release-prep-status]` 메모리는 이 PC 에만 있다. 새 PC 에서 시작 시 본 문서(특히 §11~§12)를 먼저 읽고 거기 기록된 진행 상태를 메모리에 다시 적어둘 것
+- AdMob 실 ID, Kakao 키, keystore SHA-1 등 식별값은 위에 다 기재되어 있다
 
 ---
 

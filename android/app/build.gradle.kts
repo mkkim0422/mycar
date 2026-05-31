@@ -66,7 +66,9 @@ android {
             create("release") {
                 keyAlias = keystoreProperties["keyAlias"] as String
                 keyPassword = keystoreProperties["keyPassword"] as String
-                storeFile = file(keystoreProperties["storeFile"] as String)
+                // rootProject.file: android/ 기준 (key.properties 와 동일 위치).
+                // file() 단독 사용 시 android/app/ 기준으로 찾아 실패한다.
+                storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
                 storePassword = keystoreProperties["storePassword"] as String
             }
         }

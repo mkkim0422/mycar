@@ -37,9 +37,6 @@ dependencies:
   # 기압 센서 (주차 층수 추측용)
   sensors_plus: ^6.1.1
 
-  # 카카오톡 공유 (FeedTemplate / TextTemplate)
-  kakao_flutter_sdk_share: ^1.9.0
-
   # 앱 시스템 설정 페이지 열기 (카메라 권한 거부 → 설정 이동, 알림 설정 이동)
   app_settings: ^5.0.0
 

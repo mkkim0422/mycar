@@ -1,126 +1,223 @@
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:kakao_flutter_sdk_share/kakao_flutter_sdk_share.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
-import '../config/app_config.dart';
 import '../theme/app_theme.dart';
 import '../../data/models/parking_data.dart';
 
-/// 카카오톡 주차 위치 공유 서비스.
+/// 주차 위치 공유 서비스.
 ///
-/// ## 공유 우선순위
-/// 1. 로컬 사진 → 카카오 이미지 서버 업로드 → [FeedTemplate] (사진 카드)
-/// 2. 업로드 실패 또는 사진 없음               → [TextTemplate] (텍스트 폴백)
-/// 3. 카카오톡 미설치                          → [WebSharerClient] (브라우저 폴백)
+/// 원본 사진 하단에 캡션 바(메인 텍스트 + "by 주차기억")를 합성한 한 장의 PNG 를
+/// 만들어 OS 공유 시트(`Intent.ACTION_SEND`)로 전송한다. 카카오톡이 외부 앱의
+/// 텍스트를 무시하는 이슈를 사진 자체에 텍스트를 그려 회피한다.
 ///
-/// ## 로컬 전용 앱의 이미지 공유 제약
-/// 카카오 FeedTemplate은 공개 https:// URL만 허용한다.
-/// 로컬 파일은 `ShareClient.uploadImage()`로 카카오 CDN에 임시 업로드하여 URL을 확보한다.
-/// 업로드가 실패해도 앱은 크래시하지 않고 텍스트 전용 공유로 자동 전환한다.
+/// 클래스 이름은 호출부 호환을 위해 유지(`KakaoShareService`).
 class KakaoShareService {
   KakaoShareService._();
 
-  static const _shareTitle = '내 차 어디? 여기!';
+  static const _brandTag = '주차기억';
 
-  // 배포 전 AppConfig.appLandingUrl을 실제 스토어 URL로 교체하세요.
-  static final _appLink = Link(
-    mobileWebUrl: Uri.parse(AppConfig.appLandingUrl),
-    webUrl: Uri.parse(AppConfig.appLandingUrl),
-  );
-
-  // ── 공개 API ─────────────────────────────────────────────────────────────
-
-  /// [data]를 카카오톡으로 공유한다.
+  /// [data]를 OS 공유 시트로 공유한다.
   ///
-  /// [context]는 에러·성공 SnackBar 표시에 사용된다.
+  /// 사진이 있으면 캡션을 합성한 PNG 를, 합성 실패·사진 없음이면 텍스트만 전송한다.
   static Future<void> share(BuildContext context, ParkingData data) async {
     try {
-      final description =
-          '[${data.floor} · ${data.zone}] 에 주차되었습니다.';
-
-      // ── 1. 사진 업로드 시도 ──────────────────────────────────────────────
-      String? imageUrl;
+      final caption = _buildDescription(data);
       final photoPath = data.photoPath;
-      if (photoPath != null && File(photoPath).existsSync()) {
-        imageUrl = await _tryUploadImage(photoPath);
+      final hasPhoto = photoPath != null && File(photoPath).existsSync();
+
+      String? composedPath;
+      if (hasPhoto) {
+        composedPath = await _composeCaptionedImage(
+          sourcePath: photoPath,
+          caption: caption,
+        );
       }
 
-      // ── 2. 템플릿 선택 ───────────────────────────────────────────────────
-      final template = imageUrl != null
-          ? _buildFeedTemplate(imageUrl, description)
-          : _buildTextTemplate(description, data);
+      final params = composedPath != null
+          ? ShareParams(files: [XFile(composedPath)])
+          : ShareParams(text: caption);
 
-      // ── 3. 카카오톡 or 브라우저로 공유 ──────────────────────────────────
-      if (await ShareClient.instance.isKakaoTalkSharingAvailable()) {
-        final uri =
-            await ShareClient.instance.shareDefault(template: template);
-        await ShareClient.instance.launchKakaoTalk(uri);
-      } else {
-        // 카카오톡 미설치 → 모바일 브라우저 기반 공유
-        final uri = await WebSharerClient.instance
-            .makeDefaultUrl(template: template);
-        await launchBrowserTab(uri, popupOpen: true);
-      }
-    } on KakaoClientException catch (e) {
-      _showSnackBar(context, '카카오 앱 키 설정이 필요합니다: ${e.message}');
-    } on KakaoApiException catch (e) {
-      _showSnackBar(context, '카카오 서버 오류: ${e.message}');
-    } catch (e) {
+      await SharePlus.instance.share(params);
+    } catch (_) {
       _showSnackBar(context, '공유에 실패했습니다. 잠시 후 다시 시도해주세요.');
     }
   }
 
-  // ── 내부 헬퍼 ────────────────────────────────────────────────────────────
-
-  /// 로컬 사진을 카카오 CDN에 업로드하여 공개 URL을 반환한다.
-  /// 네트워크 불가, 파일 오류 등 모든 예외는 null 반환으로 흡수한다.
-  static Future<String?> _tryUploadImage(String localPath) async {
+  /// 원본 사진 하단에 iOS 글래스모피즘 카드를 오버레이한 PNG 를 임시 디렉토리에
+  /// 저장하고 경로를 반환한다. 사진은 잘리거나 줄어들지 않고 원본 비율 그대로
+  /// 보존된다.
+  ///
+  /// 합성 단계:
+  /// 1. 사진 그대로 그리기
+  /// 2. 카드 영역만 clipRRect → saveLayer(blur) 안에서 사진 재그리기 → 블러 효과
+  /// 3. 어두운 톤 오버레이로 가독성 확보 + 글래스 깊이감
+  /// 4. 살짝 흰색 보더로 글래스 가장자리 표현
+  /// 5. 흰색 메인 텍스트 + 반투명 흰색 브랜드 워터마크
+  ///
+  /// 디코드/인코드 실패 시 null 을 반환하여 호출부에서 텍스트 폴백을 쓰도록 한다.
+  static Future<String?> _composeCaptionedImage({
+    required String sourcePath,
+    required String caption,
+  }) async {
+    ui.Image? src;
+    ui.Image? composed;
     try {
-      final result = await ShareClient.instance.uploadImage(
-        image: File(localPath),
+      final bytes = await File(sourcePath).readAsBytes();
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      src = frame.image;
+
+      final w = src.width.toDouble();
+      final h = src.height.toDouble();
+
+      // ── 글래스 카드 메트릭 (모두 사진 너비 비례) ────────────────────────
+      final sideMargin = w * 0.05;
+      final bottomMargin = w * 0.05;
+      final paddingH = w * 0.05;
+      final paddingV = w * 0.045;
+      final cornerRadius = w * 0.04;
+      final innerWidth = w - sideMargin * 2 - paddingH * 2;
+
+      // ── 텍스트 사이즈 측정 (카드 높이 계산에 필요) ──────────────────────
+      final mainFontSize = w * 0.052;
+      final brandFontSize = w * 0.028;
+      const textGap = 8.0;
+
+      final mainPara = (ui.ParagraphBuilder(ui.ParagraphStyle(
+        textAlign: TextAlign.center,
+        fontSize: mainFontSize,
+        fontWeight: FontWeight.w700,
+        height: 1.2,
+      ))
+            ..pushStyle(ui.TextStyle(color: const Color(0xFFFFFFFF)))
+            ..addText(caption))
+          .build()
+        ..layout(ui.ParagraphConstraints(width: innerWidth));
+
+      final brandPara = (ui.ParagraphBuilder(ui.ParagraphStyle(
+        textAlign: TextAlign.center,
+        fontSize: brandFontSize,
+        fontWeight: FontWeight.w500,
+        height: 1.2,
+      ))
+            ..pushStyle(ui.TextStyle(color: const Color(0xB3FFFFFF)))
+            ..addText(_brandTag))
+          .build()
+        ..layout(ui.ParagraphConstraints(width: innerWidth));
+
+      final cardContentH = mainPara.height + textGap + brandPara.height;
+      final cardH = paddingV * 2 + cardContentH;
+      final cardRect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(
+          sideMargin,
+          h - cardH - bottomMargin,
+          w - sideMargin * 2,
+          cardH,
+        ),
+        Radius.circular(cornerRadius),
       );
-      return result.infos.original.url;
+
+      // ── Canvas 시작 (totalH = h, 사진 원본 비율 그대로) ─────────────────
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, w, h));
+
+      // 1. 원본 사진
+      canvas.drawImage(src, Offset.zero, Paint());
+
+      // 2. 글래스 카드 영역만 블러 + 어두운 톤
+      canvas.save();
+      canvas.clipRRect(cardRect);
+
+      // saveLayer 에 blur 필터 적용 → 안에서 그리는 모든 것이 블러됨
+      final cardBounds = cardRect.outerRect;
+      canvas.saveLayer(
+        cardBounds,
+        Paint()
+          ..imageFilter = ui.ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+      );
+      canvas.drawImage(src, Offset.zero, Paint());
+      canvas.restore(); // blur saveLayer 끝
+
+      // 어두운 톤 오버레이 (검정 40%)
+      canvas.drawRRect(
+        cardRect,
+        Paint()..color = const Color(0x66000000),
+      );
+
+      canvas.restore(); // clipRRect 끝
+
+      // 3. 글래스 보더 (살짝 흰색, 가장자리 강조)
+      canvas.drawRRect(
+        cardRect,
+        Paint()
+          ..color = const Color(0x40FFFFFF)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = (w * 0.0015).clamp(1.0, 4.0),
+      );
+
+      // 4. 텍스트
+      final textOffsetX = sideMargin + paddingH;
+      final textTop = cardRect.top + paddingV;
+      canvas.drawParagraph(mainPara, Offset(textOffsetX, textTop));
+      canvas.drawParagraph(
+        brandPara,
+        Offset(textOffsetX, textTop + mainPara.height + textGap),
+      );
+
+      // ── PNG 변환 + 임시 파일 저장 ───────────────────────────────────────
+      final picture = recorder.endRecording();
+      composed = await picture.toImage(w.toInt(), h.toInt());
+      picture.dispose();
+      final byteData =
+          await composed.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) return null;
+
+      final tempDir = await getTemporaryDirectory();
+      final filename = 'share_${DateTime.now().millisecondsSinceEpoch}.png';
+      final file = File('${tempDir.path}/$filename');
+      await file.writeAsBytes(byteData.buffer.asUint8List(), flush: true);
+      return file.path;
     } catch (_) {
-      // 업로드 실패 → TextTemplate 폴백. 앱 크래시 없음.
       return null;
+    } finally {
+      src?.dispose();
+      composed?.dispose();
     }
   }
 
-  /// FeedTemplate: 사진 카드 + 제목 + 설명 구조.
-  /// 카카오톡에서 썸네일이 있는 공유 카드로 표시된다.
-  static FeedTemplate _buildFeedTemplate(
-      String imageUrl, String description) {
-    return FeedTemplate(
-      content: Content(
-        title: _shareTitle,
-        description: description,
-        imageUrl: Uri.parse(imageUrl),
-        link: _appLink,
-      ),
-    );
+  /// 공유 글 본문 생성. 층/구역 유무에 따라 4가지로 분기한다.
+  /// 주소·좌표·지도링크는 의도적으로 미포함.
+  /// 입력 화면에서 빈 값일 때 저장되는 placeholder `'-'` 도 빈 값으로 처리.
+  static String _buildDescription(ParkingData data) {
+    final floor = _normalize(data.floor);
+    final zone = _normalize(data.zone);
+    if (floor != null && zone != null) {
+      return '$floor · $zone에 주차했어요';
+    }
+    if (floor != null) {
+      return '$floor에 주차했어요';
+    }
+    if (zone != null) {
+      return '$zone에 주차했어요';
+    }
+    return '여기에 주차했어요';
   }
 
-  /// TextTemplate: 텍스트 전용 폴백.
-  /// 사진 업로드 실패 또는 사진이 없을 때 사용한다.
-  static TextTemplate _buildTextTemplate(
-      String description, ParkingData data) {
-    final timestamp = _formatTimestamp(data.timestamp);
-    return TextTemplate(
-      text: '$_shareTitle\n\n$description\n$timestamp',
-      link: _appLink,
-    );
+  static String? _normalize(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty || trimmed == '-') return null;
+    return trimmed;
   }
 
-  static String _formatTimestamp(DateTime dt) {
-    final hour = dt.hour;
-    final ampm = hour < 12 ? '오전' : '오후';
-    final hour12 = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour);
-    final min = dt.minute.toString().padLeft(2, '0');
-    return '${dt.year}년 ${dt.month}월 ${dt.day}일  $ampm $hour12:$min 주차';
-  }
-
-  static void _showSnackBar(BuildContext context, String message) {
+  static void _showSnackBar(
+    BuildContext context,
+    String message, {
+    Duration? duration,
+  }) {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -134,6 +231,7 @@ class KakaoShareService {
           borderRadius: BorderRadius.circular(AppTheme.radiusChip),
         ),
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        duration: duration ?? const Duration(seconds: 4),
       ),
     );
   }

@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
-import '../../core/config/app_config.dart';
 import '../../core/navigation/route_observer.dart';
 import '../../core/services/kakao_share_service.dart';
 import '../../core/services/location_service.dart';
@@ -290,11 +289,7 @@ class HomePageState extends State<HomePage> with RouteAware {
                 displayAddress: displayAddress,
                 addressState: addressState,
                 onRegisterTap: widget.onRegisterTap,
-                // 카카오 앱키가 플레이스홀더 상태면 공유 버튼 자체를 감춰
-                // "wrong appKey … format" 에러가 뜨지 않게 한다.
-                onShareTap: AppConfig.isKakaoConfigured
-                    ? () => KakaoShareService.share(context, _data!)
-                    : null,
+                onShareTap: () => KakaoShareService.share(context, _data!),
               ),
     );
   }
@@ -378,7 +373,6 @@ class _DataBody extends StatelessWidget {
                         height: imageHeight,
                         child: _ParkingImageCard(
                           photoPath: data.photoPath,
-                          onShareTap: onShareTap,
                           onPhotoTap: () {
                             final path = data.photoPath;
                             if (path == null || path.isEmpty) return;
@@ -392,8 +386,19 @@ class _DataBody extends StatelessWidget {
 
                       const SizedBox(height: 16),
 
-                      // ── 주차 구역 텍스트 ───────────────────────────
-                      _ZoneDisplay(data: data),
+                      // ── 주차 구역 텍스트 + 공유 버튼 ───────────────
+                      // 사진 위 오버레이가 아닌 텍스트 라인 우측에 배치해
+                      // 사진 탭(전체화면)과 충돌하지 않게 한다.
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(child: _ZoneDisplay(data: data)),
+                          if (onShareTap != null) ...[
+                            const SizedBox(width: 8),
+                            _ShareIconButton(onTap: onShareTap!),
+                          ],
+                        ],
+                      ),
 
                       const SizedBox(height: 10),
 
@@ -688,16 +693,13 @@ class _EmptyBody extends StatelessWidget {
 
 /// Full-bleed 주차 사진 카드.
 /// 사진 경로가 없으면 그라디언트 플레이스홀더를 표시한다.
-/// [onShareTap]이 제공되면 우상단에 공유 버튼을 오버레이한다.
 /// [onPhotoTap]이 제공되면 사진 본문을 탭했을 때 호출된다 (전체화면 뷰어용).
 class _ParkingImageCard extends StatelessWidget {
   final String? photoPath;
-  final VoidCallback? onShareTap;
   final VoidCallback? onPhotoTap;
 
   const _ParkingImageCard({
     this.photoPath,
-    this.onShareTap,
     this.onPhotoTap,
   });
 
@@ -707,46 +709,50 @@ class _ParkingImageCard extends StatelessWidget {
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(AppTheme.radiusImage),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // ── 배경 이미지 or 플레이스홀더 ──────────────────────────────
-          // 사진이 있을 때만 탭 이벤트 수신 (placeholder 는 의미 없음).
-          GestureDetector(
-            onTap: hasImage ? onPhotoTap : null,
-            child: hasImage
-                ? Image.file(
-                    File(photoPath!),
-                    fit: BoxFit.cover,
-                    // 대용량 사진의 메모리 스파이크 방지
-                    cacheWidth: 1200,
-                  )
-                : _PlaceholderImage(),
-          ),
+      // SizedBox.expand 로 자식을 부모(이미지 카드 SizedBox) 영역 전체로 확장.
+      // 없으면 Image 가 본인 intrinsic 비율로 축소되어 카드가 작게 표시됨.
+      child: SizedBox.expand(
+        // 사진이 있을 때만 탭 이벤트 수신 (placeholder 는 의미 없음).
+        child: GestureDetector(
+          onTap: hasImage ? onPhotoTap : null,
+          child: hasImage
+              ? Image.file(
+                  File(photoPath!),
+                  fit: BoxFit.cover,
+                  // 대용량 사진의 메모리 스파이크 방지
+                  cacheWidth: 1200,
+                )
+              : _PlaceholderImage(),
+        ),
+      ),
+    );
+  }
+}
 
-          // ── 우상단 공유 버튼 ─────────────────────────────────────────
-          if (onShareTap != null)
-            Positioned(
-              top: 12,
-              right: 12,
-              child: GestureDetector(
-                onTap: onShareTap,
-                child: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.80),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.ios_share_rounded,
-                    color: AppTheme.gray900,
-                    size: 20,
-                  ),
-                ),
-              ),
-            ),
-        ],
+/// 구역 텍스트 라인 우측에 들어가는 미니멀 공유 버튼.
+/// 사진 위에 오버레이하지 않아 사진 탭(전체화면 뷰어)과 충돌하지 않는다.
+class _ShareIconButton extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _ShareIconButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: const BoxDecoration(
+          color: AppTheme.gray100,
+          shape: BoxShape.circle,
+        ),
+        child: const Icon(
+          Icons.ios_share_rounded,
+          color: AppTheme.gray900,
+          size: 20,
+        ),
       ),
     );
   }

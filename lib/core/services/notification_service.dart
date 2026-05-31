@@ -44,9 +44,10 @@ class NotificationService {
     _onCameraReturn = onCameraReturn;
 
     const androidSettings = AndroidInitializationSettings(
-      // Android 8.0+ 적응형 아이콘 또는 단색 아이콘 리소스명 (확장자 제외)
-      // 현재는 기본 Android 아이콘 사용; 실제 배포 시 앱 아이콘으로 교체 필요
-      '@mipmap/ic_launcher',
+      // Material 가이드 준수: 알림 아이콘은 흰색 단색 실루엣 (alpha mask).
+      // @mipmap/ic_launcher 같은 컬러 아이콘은 Android 5.0+ 알림 트레이에서
+      // 흰 사각형으로 강제 변환됨.
+      '@drawable/ic_notification',
     );
 
     const initSettings = InitializationSettings(android: androidSettings);

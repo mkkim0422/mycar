@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
-import 'package:kakao_flutter_sdk_share/kakao_flutter_sdk_share.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -165,8 +164,6 @@ void main() async {
       });
     }
   });
-
-  KakaoSdk.init(nativeAppKey: AppConfig.kakaoNativeAppKey);
 
   final prefs = await SharedPreferences.getInstance();
   // 온보딩 통과 조건: 약관(필수 2종) 동의 + OS 권한 다이얼로그 1회 이상 진행.

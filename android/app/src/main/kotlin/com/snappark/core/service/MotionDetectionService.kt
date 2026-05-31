@@ -18,6 +18,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import com.snappark.R
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.snappark.MainActivity
@@ -252,7 +253,7 @@ class MotionDetectionService : Service(), SensorEventListener {
         )
 
         val notification = NotificationCompat.Builder(this, PARKING_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_map)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("🚗 주차하셨나요?")
             .setContentText("📸 위치를 기록해두세요!")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -278,7 +279,7 @@ class MotionDetectionService : Service(), SensorEventListener {
 
     private fun buildForegroundNotification(): Notification =
         NotificationCompat.Builder(this, FG_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_map)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("주차 감지 중")
             .setContentText("움직임을 감지하면 알림을 보내드립니다")
             .setPriority(NotificationCompat.PRIORITY_LOW)
