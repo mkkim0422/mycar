@@ -210,7 +210,7 @@ class _ParkingInputPageState extends State<ParkingInputPage> {
                         const SizedBox(height: 8),
                         _Input(
                           controller: _zoneCtrl,
-                          hint: '구역',
+                          hint: 'C13구역',
                           enabled: !_isSaving,
                         ),
                       ],
