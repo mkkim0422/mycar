@@ -811,6 +811,8 @@ class _CameraScreenState extends State<CameraScreen>
         _popped = true;
         Navigator.of(context).pop({
           'zone': _lastMatchedZone ?? '',
+          'floorType': _lastMatchedFloorType ?? '',
+          'floorNum': _lastMatchedFloorNum ?? '',
           'imagePath': savedPath,
         });
         return;

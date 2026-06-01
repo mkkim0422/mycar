@@ -311,7 +311,7 @@ main()
    - 사진 + 텍스트 통합: 사진 하단에 iOS 글래스모피즘 캡션 카드(`ImageFilter.blur`) 합성한 PNG 한 장 전송
    - 공유 버튼은 사진 위 오버레이가 아닌 **구역 텍스트 라인 우측 ghost 아이콘** 배치 (사진 탭 충돌 방지)
    - `kakao_share_service.dart` 클래스명은 호출부 호환을 위해 유지, 내부 구현만 share_plus
-3. **약관 정비**: 책임자 → "운영자" + `mkkim850422@gmail.com`. sphinfo 이메일 약관에서 전부 제거. "회사" → "운영자" 일괄
+3. **약관 정비**: 책임자 → "운영자" + `mkkim850422@gmail.com`. 회사 이메일 약관에서 전부 제거. "회사" → "운영자" 일괄
 4. **알림 아이콘**: `drawable/ic_notification.xml` 신규 (Material `local_parking` 흰색 단색 실루엣). Dart + Native 3곳 동시 교체. R8 minify 통과 확인
 5. **업로드 서명키 생성**: alias=upload, validity 25년. `build.gradle.kts` 의 `signingConfigs.release.storeFile` 은 `rootProject.file(...)` 사용 (android/ 폴더 기준)
 6. **release AAB 빌드**: `build/app/outputs/bundle/release/app-release.aab` (72.1MB)

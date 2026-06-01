@@ -109,6 +109,7 @@ class _AdBannerState extends State<AdBanner> {
         },
         onAdFailedToLoad: (ad, error) {
           ad.dispose();
+          _ad = null;
           _dismiss();
         },
       ),

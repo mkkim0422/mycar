@@ -10,8 +10,9 @@ AdMob 수익 인벤토리 보호를 위해 개발자 도메인에 `app-ads.txt` 
 
 1. AdMob 콘솔 → 앱 → "주차기억" → 앱 설정 → **app-ads.txt** 메뉴
 2. 표시된 1줄(예: `google.com, pub-3708412629376493, DIRECT, f08c47fec0942fa0`) 복사
-3. Play Console 에 등록된 개발자 사이트(예: `https://sphinfo.co.kr`)의 **루트 경로**에 `app-ads.txt` 파일 업로드
-   - 최종 URL: `https://sphinfo.co.kr/app-ads.txt`
+3. 본인이 소유한 개발자 사이트(Play Console 의 "개발자 사이트"에 등록한 도메인)의 **루트 경로**에 `app-ads.txt` 파일 업로드
+   - 최종 URL 예: `https://<개발자사이트도메인>/app-ads.txt`
+   - 별도 도메인이 없으면 GitHub Pages(무료, 예: `https://<github아이디>.github.io`)로 호스팅하거나, app-ads.txt 게시를 생략해도 된다(아래 주의 참고).
 4. 콘솔에서 [확인] → 24~48 시간 내 "인증됨" 상태로 전환
 
 > 미게시 시: 일부 광고 인벤토리에서 입찰 제외 → 수익 감소 (정책 위반은 아님)

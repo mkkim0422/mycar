@@ -9,7 +9,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:permission_handler/permission_handler.dart';
 
-import 'core/config/app_config.dart';
 import 'core/navigation/route_observer.dart';
 import 'core/services/billing_service.dart';
 import 'core/services/notification_service.dart';
