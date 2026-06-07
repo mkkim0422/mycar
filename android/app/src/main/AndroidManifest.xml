@@ -19,6 +19,15 @@
     <!-- ── 푸시 알림 (Android 13+ 런타임 권한) ──────────────────────────── -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- ── 운전 감지 (Activity Recognition — 차량 자동 학습) ────────────── -->
+    <!-- "내 차 BT"를 이름이 아니라 "운전 중 연결돼 있었는가"로 학습하기 위함. -->
+    <!-- API 29+: 런타임 권한 / 미만: GMS normal 권한. -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <uses-permission android:name="com.google.android.gms.permission.ACTIVITY_RECOGNITION" />
+
+    <!-- ── 재부팅 후 운전 감지 구독 복원 ─────────────────────────────────── -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <!-- ── 포그라운드 서비스 (모션 감지용, BT 해제 후 가속도계 모니터링) ── -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SHORT_SERVICE" />
@@ -28,7 +37,7 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
-    <!-- ── 인터넷 (역지오코딩 HTTPS 호출: OpenStreetMap Nominatim) ──────── -->
+    <!-- ── 인터넷 (역지오코딩 HTTPS 호출: 카카오 로컬 API, 폴백 Android Geocoder) ── -->
     <!-- release 빌드는 debug 매니페스트 자동 머지가 적용되지 않으므로 명시 필수. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
@@ -86,6 +95,27 @@
             <intent-filter>
                 <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
                 <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+            ── DrivingStateReceiver ────────────────────────────────────────
+            운전 감지(IN_VEHICLE) 전이 수신. DrivingDetection 이 만든 PendingIntent
+            로만 호출되므로 exported=false.
+        -->
+        <receiver
+            android:name=".core.receiver.DrivingStateReceiver"
+            android:exported="false" />
+
+        <!--
+            ── BootReceiver ────────────────────────────────────────────────
+            재부팅 후 운전 감지 구독을 재등록한다.
+        -->
+        <receiver
+            android:name=".core.receiver.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
 

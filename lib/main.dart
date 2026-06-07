@@ -270,6 +270,22 @@ class _ShellScreenState extends State<ShellScreen> {
     if (!btStatus.isGranted) {
       await Permission.bluetoothConnect.request();
     }
+
+    // ── 활동 인식(운전 감지) — 기존 사용자 마이그레이션 ─────────────────────
+    //   온보딩을 이미 마친 사용자는 새로 추가된 ACTIVITY_RECOGNITION 권한 요청을
+    //   거치지 않으므로, 차량 자동 학습이 전혀 동작하지 않는다. 여기서 **딱 1회만**
+    //   요청한다. 'ar_permission_asked' 플래그를 온보딩과 공유해, 첫 거부 후 매
+    //   실행마다 다시 묻는 일(첫 거부는 permanentlyDenied 가 아님)을 막는다.
+    final arGranted = await Permission.activityRecognition.isGranted;
+    final arAsked = prefs.getBool('ar_permission_asked') ?? false;
+    if (!arGranted && !arAsked) {
+      await prefs.setBool('ar_permission_asked', true);
+      await Permission.activityRecognition.request();
+    }
+    // 권한 유무와 무관하게 등록 시도(미허용 시 네이티브에서 no-op).
+    try {
+      await _widgetChannel.invokeMethod<bool>('ensureDrivingDetection');
+    } catch (_) {}
   }
 
   /// 설치 직후 **최초 1회만** 위젯 설정 페이지를 자동 표시한다.

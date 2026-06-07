@@ -19,27 +19,35 @@ import com.snappark.core.data.SharedPrefsHelper
 import com.snappark.core.service.MotionDetectionService
 
 /**
- * 블루투스 연결 해제 이벤트를 수동으로 수신하는 BroadcastReceiver.
+ * 블루투스 연결/해제 이벤트를 수신해 **"내 차 BT"가 끊겼을 때만** 주차 알림 흐름을
+ * 시작하는 BroadcastReceiver.
  *
- * ## 동작 흐름 (v2 — 모션 감지 통합)
- * 1. OS 가 [ACL_DISCONNECTED] 브로드캐스트 → [onReceive] 호출
- * 2. [MotionDetectionService] 포그라운드 서비스 시작
- *    → 가속도계로 "하차 모션" 감지 → 즉시 주차 알림 (< 3초 지연)
- * 3. 서비스 시작 실패 시 → 즉시 알림 발송 (레거시 폴백)
+ * ## 핵심 설계 — "추측"이 아니라 "학습"
+ * 과거 버전은 기기 이름·클래스로 차량을 *추측*했다. 그 결과 BT 스피커("lightspeaker7"),
+ * 회의용 스피커폰, TV 등 비차량 오디오가 차로 오인식돼 오알림이 발생했다.
+ * 특히 ACL_DISCONNECTED 시점에는 `device.name` 이 null 인 경우가 많아 이름 기반
+ * 판별 자체가 불안정했다.
  *
- * ## 설계 원칙 (배터리 최적화)
- * - 지속적인 BT 스캔(BluetoothLeScanner 등)을 사용하지 않는다.
- * - OS가 [android.bluetooth.device.action.ACL_DISCONNECTED] 브로드캐스트를
- *   보낼 때만 [onReceive]가 호출된다 → 완전 수동(Passive) 구조.
- * - [MotionDetectionService] 수명 ≤ 2분, 대부분 1~3초 내 종료.
+ * v3 는 차량을 **자동 학습**한다:
+ *  1. **연결(CONNECTED)** 시점(이름이 살아있는 시점)에 "차량 후보"(오디오 기기이고
+ *     이어폰·스피커가 아님)만 추려 [SecurePrefsHelper] 연결 집합에 넣는다.
+ *  2. **운전 감지([DrivingStateReceiver], IN_VEHICLE)** 가 그 후보를 "이번 운전과
+ *     함께한 기기"로 표시한다.
+ *  3. **해제(DISCONNECTED)** 시 그 기기가 운전과 함께했으면 득표. 서로 다른 운전
+ *     [SecurePrefsHelper.DISTINCT_TRIPS_TO_LEARN] 회를 채우면 "내 차"로 확정.
+ *  4. 확정 이후에는 **그 MAC 의 해제만** 알림 흐름을 탄다. 끊김 시점엔 이름이 아니라
+ *     **MAC** 으로만 매칭하므로 null name 문제가 사라진다.
  *
- * ## 자동 등록 방식
- * - AndroidManifest.xml의 <receiver> 태그로 선언적 등록 → 앱이 꺼진 상태에서도
- *   OS가 직접 이 클래스를 인스턴스화하여 호출한다.
+ * 집 스피커는 운전과 무관해 표가 안 쌓이고, 이어폰은 후보 단계에서 탈락한다.
  *
- * ## Android 12+ 포그라운드 서비스 제한 예외
- * - Bluetooth 브로드캐스트 수신자에서의 포그라운드 서비스 시작은
- *   Android 12+(API 31) 백그라운드 제한에서 **면제**된다.
+ * ## 우선순위
+ *  - 사용자가 직접 태깅한 [SecurePrefsHelper.getManualCarId] 가 있으면 그것이 최우선
+ *    (학습보다 우선). 없으면 학습된 [SecurePrefsHelper.getLearnedCarId] 사용.
+ *  - 둘 다 없으면 "학습 모드" — 자동 알림을 발사하지 않고 조용히 학습만 한다.
+ *
+ * ## 설계 원칙 (배터리)
+ *  - 지속 BT 스캔 없음. OS 의 ACL 브로드캐스트에만 수동 반응.
+ *  - 운전 감지는 저전력 ActivityTransition API.
  */
 class BluetoothDisconnectReceiver : BroadcastReceiver() {
 
@@ -49,59 +57,97 @@ class BluetoothDisconnectReceiver : BroadcastReceiver() {
         private const val NOTIFICATION_ID = 1001
 
         // Flutter → Android 앱 런치 시 전달할 extra 키
-        // NotificationService.dart의 payload 값과 동일하게 맞춘다.
         const val EXTRA_PAYLOAD = "snappark_payload"
         const val PAYLOAD_OPEN_CAMERA = "open_camera"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
         val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+        val mac = runCatching { device?.address?.uppercase() }.getOrNull()
 
         when (intent.action) {
-            // ── BT 재연결 → 실행 중인 모션 감지 서비스 즉시 취소 ─────────
-            // 차량 BT 연결 시 OS가 기존 ACL을 끊고(DISCONNECTED) 재연결(CONNECTED)
-            // 하는 과정에서 오알림이 발생할 수 있다. 재연결 시 서비스를 중단한다.
+            // ── BT 연결 ────────────────────────────────────────────────────
             BluetoothDevice.ACTION_ACL_CONNECTED -> {
-                Log.d("SnapPark", "BT connected: ${device?.name} → 서비스 취소")
+                // 차량 재연결 사이클(DISCONNECT→CONNECT)의 오알림 흡수: 진행 중인
+                // 모션 감지 서비스가 있으면 중단.
                 runCatching { context.stopService(Intent(context, MotionDetectionService::class.java)) }
 
-                // ── 차량 디바이스 재연결 → 알림 라치 해제 (새 주차 사이클 시작) ──
-                //    "끊김 사이클당 알림 1회" 보장의 핵심: 라치는 시간이 아니라
-                //    **차량 ACL_CONNECTED** 로만 풀린다. 비차량(이어폰·워치 등) 이
-                //    풀면 그 직후 같은 기기의 끊김이 가설 A(자동 필터 오인식)로
-                //    알림을 발사할 수 있다. stopService 는 BT flicker 흡수용으로
-                //    유지하되, 라치 해제는 isCarDevice 통과 시에만 수행.
-                if (device != null && isCarDevice(context, device)) {
-                    SharedPrefsHelper.clearParkingNotificationLatch(context)
-                    Log.d("SnapPark", "차량 재연결 → 알림 라치 해제")
+                if (mac == null) return
+                val targetMac = resolveTargetCarMac(context)
+
+                if (targetMac != null) {
+                    // 내 차(수동/학습)가 다시 연결됨 = 새 주차 사이클 → 알림 라치 해제.
+                    if (mac == targetMac) {
+                        SharedPrefsHelper.clearParkingNotificationLatch(context)
+                        Log.d("SnapPark", "내 차 재연결 → 알림 라치 해제")
+                    }
+                } else {
+                    // 학습 모드: 차량 후보면 연결 집합에 등록(이름이 살아있는 지금 판정).
+                    if (device != null && isLearningCandidate(device)) {
+                        SecurePrefsHelper.addConnectedCandidate(context, mac)
+                        Log.d("SnapPark", "차량 후보 연결: ${device.name} ($mac)")
+                    }
                 }
                 return
             }
 
+            // ── BT 해제 ────────────────────────────────────────────────────
             BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
-                // ── 사용자 설정: 자동 감지 OFF 면 어떤 알림도 발송하지 않음 ─────
-                // ※ 이 검사를 CONNECTED 분기 아래에 둔 이유: 사용자가 OFF 상태에서
-                //   실수로 이미 시작된 서비스가 남아있다면 DISCONNECTED 전에 도착하는
-                //   CONNECTED 이벤트로도 정리되어야 하므로, CONNECTED 는 항상 통과.
+                // 연결 집합 정리는 항상 먼저 수행한다(타깃 모드에선 no-op). 자동 감지 OFF
+                // 분기보다 앞에 둔 이유: OFF 동안 해제된 기기를 connected set 에서 못 빼면
+                // 스테일 항목으로 남아, 다시 ON 했을 때 묵은 항목이 trip 에 끼어 부당 득표할
+                // 수 있다(리뷰 발견). 정리는 알림과 무관한 안전한 동작이라 OFF 여도 수행.
+                if (mac != null) SecurePrefsHelper.removeConnectedCandidate(context, mac)
+
                 if (!SharedPrefsHelper.isBtAutoEnabled(context)) {
-                    Log.d("SnapPark", "BT 자동 감지 OFF → 알림 발송 차단")
-                    // 혹시 실행 중인 모션 감지 서비스도 즉시 중단한다.
-                    runCatching { context.stopService(Intent(context, MotionDetectionService::class.java)) }
+                    Log.d("SnapPark", "BT 자동 감지 OFF → 차단")
+                    runCatching {
+                        context.stopService(Intent(context, MotionDetectionService::class.java))
+                    }
                     return
                 }
 
-                // 차량 기기만 자동 필터링 (이어폰, 워치 등 무시)
-                if (device != null && !isCarDevice(context, device)) {
-                    Log.d("SnapPark", "BT disconnect 무시: ${device.name} (차량 기기 아님)")
+                if (mac == null) {
+                    // MAC 을 알 수 없으면 "내 차"인지 확인할 길이 없다 → 오알림 방지 위해 무시.
+                    Log.d("SnapPark", "해제 무시: MAC 불명")
                     return
                 }
-                Log.d("SnapPark", "BT disconnect 감지: ${device?.name} → 모션 감지 시작")
+
+                val targetMac = resolveTargetCarMac(context)
+                if (targetMac != null) {
+                    // ── 확정 단계: 내 차의 MAC 일 때만 발사 ──────────────────
+                    if (mac == targetMac) {
+                        Log.d("SnapPark", "내 차 해제 감지 → 모션 감지 시작")
+                        startMotionService(context)
+                    } else {
+                        Log.d("SnapPark", "해제 무시: 내 차 아님 ($mac)")
+                    }
+                    return
+                }
+
+                // ── 학습 단계: 운전과 함께한 기기면 득표. 막 확정됐다면 발사 ──
+                val justLearned = SecurePrefsHelper.registerTripAndMaybeLearn(
+                    context, mac, runCatching { device?.name }.getOrNull(),
+                )
+                if (justLearned) {
+                    Log.i("SnapPark", "차량 자동 학습 완료 ($mac) → 첫 알림 발사")
+                    startMotionService(context)
+                } else {
+                    Log.d("SnapPark", "학습 진행 중 또는 비운전 해제 → 발사 안 함 ($mac)")
+                }
+                return
             }
 
             else -> return
         }
+    }
 
-        // ── 모션 감지 서비스 시작 (< 3초 지연 목표) ──────────────────────
+    // ── 타깃 차량 MAC 결정 (수동 태깅 > 자동 학습) ───────────────────────────
+    private fun resolveTargetCarMac(context: Context): String? =
+        SecurePrefsHelper.getManualCarId(context) ?: SecurePrefsHelper.getLearnedCarId(context)
+
+    // ── 모션 감지 서비스 시작 (실패 시 즉시 알림 폴백) ───────────────────────
+    private fun startMotionService(context: Context) {
         val serviceIntent = Intent(context, MotionDetectionService::class.java)
         val started = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -110,19 +156,62 @@ class BluetoothDisconnectReceiver : BroadcastReceiver() {
                 context.startService(serviceIntent)
             }
         }.isSuccess
-
-        // 서비스 시작 실패 → 레거시 폴백: 즉시 알림 발송
-        if (!started) {
-            showNotificationDirectly(context)
-        }
+        if (!started) showNotificationDirectly(context)
     }
 
-    // ── 레거시 폴백: 서비스 없이 즉시 알림 ──────────────────────────────────
+    /**
+     * 끊긴 기기가 **차량 후보**인지 판별한다 (학습 후보 자격).
+     *
+     * 여기서는 "차량 확정"이 아니라 "학습 대상으로 지켜볼 가치가 있는가"만 본다.
+     * 실제 차량 여부는 이후 운전 감지(IN_VEHICLE) 가 검증하므로, 후보 기준은
+     * "오디오 기기이면서 이어폰/스피커가 아님" 정도로 충분하다.
+     *
+     * - 이어폰/헤드셋/스피커류는 이름·클래스로 제외 (특히 BT 스피커 오알림 차단).
+     * - 폰/PC/워치/주변기기 등 비오디오 Major 는 애초에 후보가 아니다.
+     */
+    @Suppress("DEPRECATION")
+    private fun isLearningCandidate(device: BluetoothDevice): Boolean {
+        val name = runCatching { device.name?.lowercase() }.getOrNull().orEmpty()
 
+        // 1) 이어폰·스피커 등 개인 오디오 이름 키워드 → 후보 제외
+        val excludeKeywords = listOf(
+            // 이어폰·헤드셋
+            "buds", "airpod", "earphone", "earpod", "headphone", "headset",
+            "earbud", "pods", "freebuds", "wf-", "wh-", "beats", "galaxy buds",
+            "sony wh", "sony wf", "이어폰", "이어버드", "헤드폰", "헤드셋",
+            // 스피커 (BT 스피커 오알림의 직접 원인 — lightspeaker7 등)
+            "speaker", "스피커", "soundbar", "사운드바", "soundlink", "soundcore",
+            "boom", "flip", "charge", "pulse", "clip", "wonderboom", "megaboom",
+            "jbl", "bose", "marshall", "마샬", "sound link",
+        )
+        if (excludeKeywords.any { name.contains(it) }) return false
+
+        val btClass = runCatching { device.bluetoothClass }.getOrNull()
+        val deviceClass = btClass?.deviceClass ?: 0
+        val majorClass = btClass?.majorDeviceClass ?: -1
+
+        // 2) 개인 오디오/스피커 클래스 → 후보 제외
+        if (deviceClass == BluetoothClass.Device.AUDIO_VIDEO_HEADPHONES ||
+            deviceClass == BluetoothClass.Device.AUDIO_VIDEO_WEARABLE_HEADSET ||
+            deviceClass == BluetoothClass.Device.AUDIO_VIDEO_LOUDSPEAKER ||
+            deviceClass == BluetoothClass.Device.AUDIO_VIDEO_PORTABLE_AUDIO ||
+            deviceClass == BluetoothClass.Device.AUDIO_VIDEO_HIFI_AUDIO ||
+            deviceClass == BluetoothClass.Device.AUDIO_VIDEO_MICROPHONE) {
+            return false
+        }
+
+        // 3) CAR_AUDIO / HANDSFREE 클래스 → 명백한 차량 오디오 후보
+        if (deviceClass == BluetoothClass.Device.AUDIO_VIDEO_CAR_AUDIO ||
+            deviceClass == BluetoothClass.Device.AUDIO_VIDEO_HANDSFREE) {
+            return true
+        }
+
+        // 4) 그 외 AUDIO_VIDEO Major 의 오디오 기기 → 후보로 지켜본다(운전이 검증).
+        return majorClass == BluetoothClass.Device.Major.AUDIO_VIDEO
+    }
+
+    // ── 레거시 폴백: 서비스 시작 실패 시 즉시 알림 ───────────────────────────
     private fun showNotificationDirectly(context: Context) {
-        // 모든 알림 경로가 거치는 단일 dedupe 가드. 서비스 측 fireParkingNotification 과
-        // 동일한 키·쿨다운을 공유하므로, 폴백이 발사된 직후 서비스가 정상 시작되어
-        // 또 한 번 발사 시도해도 차단된다 (그 반대도 성립).
         if (!SharedPrefsHelper.shouldFireParkingNotification(context)) {
             Log.i("SnapPark", "parking notification suppressed (cooldown, reason=receiver_fallback)")
             return
@@ -135,8 +224,11 @@ class BluetoothDisconnectReceiver : BroadcastReceiver() {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_PAYLOAD, PAYLOAD_OPEN_CAMERA)
         }
+        // 요청코드 10: MotionDetectionService 의 content(0)/fullScreen(2) PendingIntent 와
+        // 구분한다. 같은 코드+동일 타깃이면 FLAG_UPDATE_CURRENT 로 extras 가 교차 오염될
+        // 수 있어(현재는 payload 동일해 무해하나) 코드를 분리해 둔다.
         val pendingIntent = PendingIntent.getActivity(
-            context, 0, launchIntent,
+            context, 10, launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
@@ -157,152 +249,7 @@ class BluetoothDisconnectReceiver : BroadcastReceiver() {
         runCatching {
             NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
         }
-        // notify 예외 여부와 무관하게 시도 자체를 기록 — 짧은 재시도 폭주를 막는다.
         SharedPrefsHelper.markParkingNotificationFired(context)
-    }
-
-    /**
-     * 연결 해제된 기기가 **차량 블루투스**인지 포괄적으로 판별한다.
-     *
-     * ## 설계 원칙 (수동 태깅 = exclusive 모드, 미태깅 = 자동 필터)
-     * 0. **수동 태깅 모드 (exclusive)** — 사용자가 '내 차' 로 태깅한 기기가 있으면
-     *    *그 기기의 MAC 과 일치할 때만* true, 그 외는 모두 false.
-     *    설정 화면 안내 문구가 약속하는 동작: "해당 기기의 연결 해제만 감지".
-     *    ※ 태깅은 OS 이벤트 필터링 힌트일 뿐, 새로운 BT 연결/스캔은 시도하지 않는다.
-     *    ※ MAC 은 AndroidKeyStore 로 보호되는 SecurePrefsHelper 에서 복호화 조회.
-     * 1. **(태깅 없을 때만) 이어폰 차단 우선** — 이름·클래스 블록리스트로 개인
-     *    오디오 기기 제외
-     * 2. **(태깅 없을 때만) 차량 신호 포괄 수용** — 블록리스트를 통과한 기기는
-     *    다음 신호 중 하나면 차량
-     *    - CAR_AUDIO 클래스 (확정)
-     *    - HANDSFREE 클래스 (이어폰은 이미 위 단계에서 제거됨 → 핸즈프리 카 킷으로 간주)
-     *    - 국산/해외 차량 브랜드·인포테인먼트 시스템 이름 키워드
-     *    - AUDIO_VIDEO Major + Classic BT 타입 (현대 이어폰은 대부분 DUAL 이라 제외됨)
-     * 3. **2단 방어** — BT 해제 후에도 [MotionDetectionService] 가 하차 모션이 없으면
-     *    알림을 발송하지 않으므로, 차량 감지를 넉넉히 잡아도 오알림 위험이 낮다.
-     */
-    @Suppress("DEPRECATION")
-    private fun isCarDevice(context: Context, device: BluetoothDevice): Boolean {
-        // ── 0) 수동 태깅 모드 (exclusive) ──────────────────────────────
-        //    태깅된 MAC 이 존재하면 그 기기와의 정확 일치 여부만 판단한다.
-        //    설정 UI 의 안내 문구("해당 기기의 연결 해제만 감지") 와 일치시키기 위해
-        //    *불일치 시 자동 필터로 폴백하지 않는다*. 즉 태깅 후에는 다른 차량
-        //    기기(렌터카, 지인 차 등) 가 해제돼도 알림이 발송되지 않는다.
-        val manualCarId = SecurePrefsHelper.getManualCarId(context)
-        if (manualCarId != null) {
-            val deviceAddr = runCatching { device.address?.uppercase() }.getOrNull()
-            val matches = deviceAddr != null && deviceAddr == manualCarId
-            Log.d(
-                "SnapPark",
-                "수동 태깅 모드: 일치=$matches (event=${device.address}, tagged=$manualCarId)",
-            )
-            return matches
-        }
-
-        val btClass = runCatching { device.bluetoothClass }.getOrNull()
-        val deviceClass = btClass?.deviceClass ?: 0
-        val majorClass = btClass?.majorDeviceClass ?: -1
-        val name = runCatching { device.name?.lowercase() }.getOrNull().orEmpty()
-
-        // ── 1) 이어폰/헤드폰 이름 키워드 → 즉시 제외 ─────────────────────
-        //    HANDSFREE 클래스를 쓰는 이어폰도 여기서 대부분 걸러진다.
-        val earKeywords = listOf(
-            "buds", "airpod", "earphone", "earpod", "headphone", "headset",
-            "earbud", "pods", "freebuds", "wf-", "wh-", "beats", "jbl",
-            "bose qc", "bose quiet", "bose sport", "soundcore", "liberty",
-            "momentum", "galaxy buds", "sony wh", "sony wf",
-            "이어폰", "이어버드", "헤드폰", "헤드셋",
-        )
-        if (earKeywords.any { name.contains(it) }) return false
-
-        // ── 2) 개인 오디오 기기 클래스 → 즉시 제외 ───────────────────────
-        if (deviceClass == BluetoothClass.Device.AUDIO_VIDEO_HEADPHONES ||
-            deviceClass == BluetoothClass.Device.AUDIO_VIDEO_WEARABLE_HEADSET ||
-            deviceClass == BluetoothClass.Device.AUDIO_VIDEO_LOUDSPEAKER ||
-            deviceClass == BluetoothClass.Device.AUDIO_VIDEO_PORTABLE_AUDIO ||
-            deviceClass == BluetoothClass.Device.AUDIO_VIDEO_HIFI_AUDIO ||
-            deviceClass == BluetoothClass.Device.AUDIO_VIDEO_MICROPHONE) {
-            return false
-        }
-
-        // ── 3) 차량이 아닌 Major 클래스 → 즉시 제외 ──────────────────────
-        if (majorClass == BluetoothClass.Device.Major.PHONE ||
-            majorClass == BluetoothClass.Device.Major.COMPUTER ||
-            majorClass == BluetoothClass.Device.Major.PERIPHERAL ||
-            majorClass == BluetoothClass.Device.Major.WEARABLE ||
-            majorClass == BluetoothClass.Device.Major.IMAGING ||
-            majorClass == BluetoothClass.Device.Major.TOY ||
-            majorClass == BluetoothClass.Device.Major.HEALTH) {
-            return false
-        }
-
-        // ── 4) CAR_AUDIO 클래스 → 차량 확정 ──────────────────────────────
-        if (deviceClass == BluetoothClass.Device.AUDIO_VIDEO_CAR_AUDIO) return true
-
-        // ── 5) HANDSFREE 클래스 → 차량 핸즈프리 킷으로 간주 ───────────────
-        //    이어폰은 위 1~3 단계에서 이미 제거되었다.
-        if (deviceClass == BluetoothClass.Device.AUDIO_VIDEO_HANDSFREE) return true
-
-        // ── 6) 국산/해외 차량 브랜드·시스템 키워드 → 차량 확정 ────────────
-        val carKeywords = listOf(
-            // 일반 용어
-            "car", "auto", "vehicle", "obd", "car audio", "car kit",
-            "carplay", "android auto", "mirrorlink", "infotainment",
-            "차량", "자동차", "차량용",
-
-            // ── 국산 브랜드 / 인포테인먼트 ─────────────────────────────
-            "현대", "기아", "제네시스", "쉐보레", "쌍용", "르노", "삼성자동차",
-            "hyundai", "kia", "genesis", "chevrolet", "chevy",
-            "ssangyong", "kgm", "kg mobility", "renault",
-            "bluelink", "uvo", "kia connect",
-
-            // ── 독일 ─────────────────────────────────────────────────
-            "bmw", "idrive", "mini cooper",
-            "mercedes", "benz", "maybach", "amg", "mbux",
-            "audi", "mmi",
-            "volkswagen", "porsche", "pcm",
-            "skoda", "cupra", "seat leon",
-
-            // ── 일본 ─────────────────────────────────────────────────
-            "toyota", "lexus", "acura", "honda",
-            "nissan", "infiniti", "mazda", "mitsubishi", "subaru",
-
-            // ── 미국 ─────────────────────────────────────────────────
-            "ford", "lincoln", "sync",
-            "tesla", "cybertruck",
-            "jeep", "chrysler", "dodge", "uconnect", "ram 1500",
-            "cadillac", "buick", "onstar", "gmc",
-            "rivian", "lucid air", "fisker",
-
-            // ── 이탈리아 / 영국 / 슈퍼카 ───────────────────────────────
-            "fiat", "alfa romeo", "maserati", "ferrari",
-            "lamborghini", "bugatti",
-            "bentley", "rolls royce", "rolls-royce",
-            "aston martin", "mclaren", "lotus",
-            "jaguar", "land rover", "range rover",
-
-            // ── 북유럽 ────────────────────────────────────────────────
-            "volvo", "polestar", "sensus",
-
-            // ── 프랑스 / 벨기에 ───────────────────────────────────────
-            "peugeot", "citroen", "opel", "vauxhall", "ds automobiles",
-
-            // ── 중국 ─────────────────────────────────────────────────
-            "byd", "nio", "xpeng", "geely", "chery", "great wall",
-            "mg motor",
-        )
-        if (carKeywords.any { name.contains(it) }) return true
-
-        // ── 7) AUDIO_VIDEO Major + Classic BT 타입 → 전통 카 오디오 ──────
-        //    이어폰/버즈는 대부분 DUAL(BLE+Classic) 모드이므로 걸리지 않는다.
-        if (majorClass == BluetoothClass.Device.Major.AUDIO_VIDEO) {
-            val type = runCatching { device.type }
-                .getOrDefault(BluetoothDevice.DEVICE_TYPE_UNKNOWN)
-            if (type == BluetoothDevice.DEVICE_TYPE_CLASSIC) return true
-        }
-
-        // ── 8) 불확실 → 알림 보내지 않음 ─────────────────────────────────
-        return false
     }
 
     private fun createNotificationChannelIfNeeded(context: Context) {

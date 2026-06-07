@@ -61,6 +61,19 @@ object SharedPrefsHelper {
      */
     private const val KEY_PARKING_NOTIFICATION_LATCHED = "native.parking_notification_latched"
 
+    /**
+     * 라치가 걸린 시각(epoch millis) — native-only.
+     *
+     * 라치는 원칙적으로 차량 ACL_CONNECTED 로만 풀리지만, 차를 바꾸거나 학습이
+     * 어긋나 "학습된 MAC 이 다시는 연결되지 않는" 경우 라치가 영구히 잠겨 알림이
+     * 영영 안 오는 사태가 가능하다. 이를 막기 위해 [LATCH_MAX_AGE_MS] 가 지나면
+     * 자동으로 라치를 무효화한다(시간 만료는 안전망일 뿐, 1차 해제는 여전히 재연결).
+     */
+    private const val KEY_PARKING_NOTIFICATION_LATCHED_AT = "native.parking_notification_latched_at"
+
+    /** 라치 자동 만료 시간. 주차 후 이 시간이 지나면 재연결이 없어도 라치 해제. */
+    private const val LATCH_MAX_AGE_MS = 6L * 60 * 60 * 1000 // 6시간
+
     // 수동 태깅된 차량 BT MAC 은 이 파일이 아닌 [SecurePrefsHelper] (암호화 저장소)
     // 에서 관리한다. AndroidKeyStore 마스터 키로 보호되며, 레거시 평문 키는
     // MainActivity.onCreate 에서 SecurePrefsHelper.migrateFromLegacy() 가 이관/삭제.
@@ -153,19 +166,35 @@ object SharedPrefsHelper {
      * - 한 번 발사 후 ACL_CONNECTED(차량) 가 들어오기 전까지는 false 반환 →
      *   몇 분 뒤든, 몇 시간 뒤든, 어떤 가짜 ACL_DISCONNECTED 가 들어와도 차단.
      */
-    fun shouldFireParkingNotification(context: Context): Boolean =
-        !prefs(context).getBoolean(KEY_PARKING_NOTIFICATION_LATCHED, false)
+    fun shouldFireParkingNotification(context: Context): Boolean {
+        val p = prefs(context)
+        if (!p.getBoolean(KEY_PARKING_NOTIFICATION_LATCHED, false)) return true
+        // 라치가 걸려 있어도, 만료 시간이 지났으면 안전망으로 해제하고 발사 허용.
+        val latchedAt = p.getLong(KEY_PARKING_NOTIFICATION_LATCHED_AT, 0L)
+        val expired = latchedAt > 0L &&
+            (System.currentTimeMillis() - latchedAt) > LATCH_MAX_AGE_MS
+        if (expired) {
+            clearParkingNotificationLatch(context)
+            return true
+        }
+        return false
+    }
 
     /**
      * 알림 발사 직후 호출 — 다음 차량 ACL_CONNECTED 까지 모든 추가 발사를 잠근다.
      *
-     * 디스크 I/O 는 [apply] 로 비동기 처리해 BroadcastReceiver 본문이나
-     * 서비스 메인 스레드를 블로킹하지 않는다.
+     * 발사 직후 프로세스가 즉시 종료돼도 라치가 유실되지 않도록 [commit] 으로 동기
+     * 기록한다(미기록 시 직후 플리커 끊김이 중복 알림을 낼 수 있음). notify() 이후라
+     * hot path 가 아니어서 동기 커밋의 비용(작은 파일 fsync)은 무시할 수준이다.
      */
     fun markParkingNotificationFired(context: Context) {
+        // commit(): 알림 발사 직후 호출되며, 프로세스가 곧 종료돼도 라치가 반드시
+        // 디스크에 남아야 한다. 미반영 시 직후 들어오는 가짜 ACL_DISCONNECTED(플리커)가
+        // 중복 알림을 낼 수 있다. notify 이후라 hot path 가 아니므로 동기 커밋 허용.
         prefs(context).edit()
             .putBoolean(KEY_PARKING_NOTIFICATION_LATCHED, true)
-            .apply()
+            .putLong(KEY_PARKING_NOTIFICATION_LATCHED_AT, System.currentTimeMillis())
+            .commit()
     }
 
     /**

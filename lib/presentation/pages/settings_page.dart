@@ -44,10 +44,14 @@ class _SettingsPageState extends State<SettingsPage> {
   /// 현재 '내 차'로 태깅된 기기 정보. null 이면 미등록 상태.
   _TaggedCar? _taggedCar;
 
+  /// 자동 학습으로 확정된 '내 차' 정보. null 이면 아직 학습 전(학습 중).
+  _TaggedCar? _learnedCar;
+
   @override
   void initState() {
     super.initState();
     _loadTaggedCar();
+    _loadLearnedCar();
     _loadBtAutoEnabled();
     // 상품 조회 / 영속 플래그 로드 (main 에서 이미 호출 — 멱등).
     BillingService.instance.init();
@@ -88,6 +92,38 @@ class _SettingsPageState extends State<SettingsPage> {
             )
           : null;
     });
+  }
+
+  /// 자동 학습된 '내 차' 정보를 네이티브에서 로드한다.
+  Future<void> _loadLearnedCar() async {
+    Map<String, String>? info;
+    try {
+      final raw = await _nativeChannel.invokeMethod<Map<dynamic, dynamic>>(
+        'getLearnedCar',
+      );
+      info = raw?.map((k, v) => MapEntry(k.toString(), v.toString()));
+    } catch (_) {
+      info = null;
+    }
+    if (!mounted) return;
+    setState(() {
+      _learnedCar = (info != null && (info['mac']?.isNotEmpty ?? false))
+          ? _TaggedCar(name: info['name'] ?? '내 차', address: info['mac']!)
+          : null;
+    });
+  }
+
+  /// 학습 결과를 초기화한다. 잘못 학습됐거나 차를 바꿨을 때 사용.
+  Future<void> _resetCarLearning() async {
+    try {
+      await _nativeChannel.invokeMethod<void>('resetCarLearning');
+    } catch (_) {}
+    if (!mounted) return;
+    // 네이티브 상태를 다시 읽어 UI 를 일관되게 갱신.
+    await _loadLearnedCar();
+    await _loadTaggedCar();
+    if (!mounted) return;
+    _showSnackBar('학습을 초기화했습니다. 다음 주행부터 다시 학습합니다.');
   }
 
   /// 페어링된 BT 기기 목록 바텀시트를 열고, 사용자가 선택한 기기를 태깅한다.
@@ -317,6 +353,30 @@ class _SettingsPageState extends State<SettingsPage> {
                 value: _btAutoEnabled,
                 onChanged: _setBtAutoEnabled,
               ),
+              const _Divider(),
+              // 내 차 학습 상태. 운전 여부로 '내 차 BT'를 자동 인식한다.
+              _InfoRow(
+                icon: Icons.directions_car_rounded,
+                label: '내 차',
+                value: _taggedCar != null
+                    ? '${_taggedCar!.name} (직접 지정)'
+                    : (_learnedCar != null ? _learnedCar!.name : '학습 중'),
+              ),
+              if (_taggedCar == null && _learnedCar == null)
+                const _HintText(
+                  '운전 후 주차를 1~2회 반복하면 내 차 블루투스를 자동으로 '
+                  '인식합니다. 그전까지는 오알림 방지를 위해 자동 알림을 보내지 '
+                  '않습니다.',
+                ),
+              if (_taggedCar == null && _learnedCar != null) ...[
+                const _Divider(),
+                _ActionRow(
+                  icon: Icons.refresh_rounded,
+                  iconColor: AppTheme.gray500,
+                  label: '차량 다시 학습하기',
+                  onTap: _resetCarLearning,
+                ),
+              ],
             ],
           ),
 
@@ -419,9 +479,10 @@ class _SettingsPageState extends State<SettingsPage> {
 
           const SizedBox(height: 28),
 
-          // ── 섹션 4: 수동 설정 (자동 필터 우회) ───────────────────────
-          // 자동 필터(브랜드 키워드·BT 클래스)가 사용자의 차량을 인식하지 못할 때
-          // 이미 페어링된 기기 중 하나를 직접 '내 차'로 태깅하는 안전망.
+          // ── 섹션 4: 수동 설정 (자동 학습 우회) ───────────────────────
+          // 자동 학습이 사용자의 차량을 아직 인식하지 못했거나, 즉시 직접 지정하고
+          // 싶을 때 이미 페어링된 기기 중 하나를 '내 차'로 태깅하는 안전망.
+          // 수동 태깅은 자동 학습보다 우선한다.
           // ※ 신규 BT 연결을 시도하지 않으며, OS 이벤트 필터링에만 쓰인다.
           _SectionHeader(label: '알림이 오지 않나요? (수동 설정)'),
           _SettingsCard(
@@ -468,7 +529,7 @@ class _SettingsPageState extends State<SettingsPage> {
             child: Text(
               _taggedCar == null
                   ? '이미 페어링된 기기 중 내 차를 선택하면 해당 기기의 연결 해제만 감지해 알림을 보냅니다. (신규 연결 시도 없음)'
-                  : 'MAC ${_taggedCar!.address} · 태그된 기기가 해제되면 자동 필터를 건너뛰고 즉시 알림합니다.',
+                  : 'MAC ${_taggedCar!.address} · 태그된 기기가 해제되면 자동 학습보다 우선해 즉시 알림합니다.',
               style: const TextStyle(
                 fontSize: 12,
                 color: AppTheme.gray500,
@@ -855,6 +916,28 @@ class _InfoRow extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 카드 내부 보조 설명 문구 (학습 안내 등).
+class _HintText extends StatelessWidget {
+  final String text;
+  const _HintText(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(60, 0, 24, 14),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 12,
+          height: 1.5,
+          color: AppTheme.gray500,
+          letterSpacing: -0.1,
+        ),
       ),
     );
   }

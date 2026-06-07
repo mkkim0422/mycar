@@ -132,4 +132,11 @@ dependencies {
     // 대상 파일: 내부 스토리지 /data/data/com.snappark/shared_prefs/SnapParkSecurePrefs.xml
     //          (키·값 모두 AES-SIV/AES-GCM 암호화. 루팅된 디바이스에서도 평문 노출 없음)
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
+    // ── Activity Recognition (운전 감지 — 차량 자동 학습) ────────────────────
+    // "내 차"를 이름·클래스로 추측하지 않고, BT 기기가 "운전 중(IN_VEHICLE)"일 때
+    // 연결돼 있었는지로 검증해 학습한다. 집 스피커·이어폰 등 비차량 기기의 끊김
+    // 오알림을 구조적으로 차단하는 핵심 신호.
+    // ActivityTransition API 는 저전력(센서 퓨전 OS 레벨)이라 지속 GPS 와 다르다.
+    implementation("com.google.android.gms:play-services-location:21.3.0")
 }

@@ -34,7 +34,7 @@ import kotlin.math.sqrt
  * ## 동작 흐름
  * 1. [BluetoothDisconnectReceiver] 가 BT 해제 이벤트 수신 → 이 서비스 시작
  * 2. 가속도계 센서를 [SENSOR_DELAY_GAME](~50Hz)으로 등록
- * 3. 첫 [BASELINE_DURATION_MS](300ms) 동안 기준 가속도(magnitude) 수집
+ * 3. 첫 [BASELINE_DURATION_MS](200ms) 동안 기준 가속도(magnitude) 수집
  * 4. 이후 매 샘플에서 |현재 mag − baseline| > [MOTION_THRESHOLD] 이면 **즉시** 알림
  * 5. [STILL_TIMEOUT_MS](10초)간 완전 정지 → "대기 모드" 진입, 다음 모션까지 보류
  * 6. [MAX_TIMEOUT_MS](2분) 도달 시 → 무조건 알림 (예: 폰을 차에 놓고 내린 경우)
@@ -104,6 +104,7 @@ class MotionDetectionService : Service(), SensorEventListener {
         private const val REASON_MOTION = "motion"
         private const val REASON_MAX_TIMEOUT = "max_timeout"
         private const val REASON_NO_SENSOR = "no_sensor"
+        private const val REASON_FGS_TIMEOUT = "fgs_timeout"
     }
 
     private var sensorManager: SensorManager? = null
@@ -159,6 +160,22 @@ class MotionDetectionService : Service(), SensorEventListener {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int =
         START_NOT_STICKY // 시스템이 강제 종료 후 재시작 불필요
 
+    /**
+     * Android 14+ shortService 시간 예산 초과 콜백.
+     *
+     * 정상적으로는 [MAX_TIMEOUT_MS](120s) 가 shortService 한도(~180s)보다 짧아 여기
+     * 도달하지 않지만, OS 가 자원 압박/절전으로 예산을 단축하면 호출될 수 있다. 이때
+     * 아무 것도 안 하면 시스템이 서비스를 강제 종료(알림 유실 + 리스너/핸들러 누수)한다.
+     * 따라서 마지막 기회로 알림을 발사하고 즉시 정리·종료한다.
+     */
+    override fun onTimeout(startId: Int) {
+        if (triggered) { stopSelf(); return }
+        triggered = true
+        fireParkingNotification(REASON_FGS_TIMEOUT)
+        cleanup()
+        stopSelf()
+    }
+
     // ── SensorEventListener ─────────────────────────────────────────────────
 
     override fun onSensorChanged(event: SensorEvent) {
@@ -171,7 +188,7 @@ class MotionDetectionService : Service(), SensorEventListener {
 
         val elapsed = SystemClock.elapsedRealtime() - startTime
 
-        // Phase 1: 베이스라인 수집 (첫 300ms)
+        // Phase 1: 베이스라인 수집 (첫 200ms, BASELINE_DURATION_MS)
         if (elapsed < BASELINE_DURATION_MS) {
             baselineValues.add(mag)
             return
@@ -325,6 +342,9 @@ class MotionDetectionService : Service(), SensorEventListener {
     }
 
     override fun onDestroy() {
+        // 방어: 파괴 시점에 triggered 를 세워, 혹시 남아있는 지연 콜백이 메인 스레드에서
+        // 뒤늦게 실행되더라도 센서를 재등록하거나 알림을 다시 쏘지 않게 한다.
+        triggered = true
         cleanup()
         super.onDestroy()
     }

@@ -17,6 +17,7 @@ import com.snappark.core.data.SecurePrefsHelper
 import com.snappark.core.data.SharedPrefsHelper
 import com.snappark.core.data.WidgetDisplayType
 import com.snappark.core.receiver.BluetoothDisconnectReceiver
+import com.snappark.core.service.DrivingDetection
 import com.snappark.core.service.MotionDetectionService
 import com.snappark.core.widget.ParkingWidget2x1Provider
 import com.snappark.core.widget.ParkingWidget2x2Provider
@@ -53,6 +54,18 @@ class MainActivity : FlutterActivity() {
         //    앱 실행마다 호출되지만, 레거시 키가 이미 제거된 상태라면 거의 no-op.
         //    Dart 초기화보다 먼저 실행되어야 이후 secureGetManualCarId 호출이 일관됨.
         SecurePrefsHelper.migrateFromLegacy(this)
+
+        // ── 운전 감지(Activity Recognition) 구독 등록 ─────────────────────
+        //    권한이 있으면 등록, 없으면 내부적으로 no-op. 차량 자동 학습의 운전
+        //    신호원이다. 권한이 온보딩 중 늦게 허용될 수 있어 onResume 에서도 재시도.
+        DrivingDetection.register(applicationContext)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 온보딩에서 권한을 막 허용한 경우 등, 권한 획득 직후 등록을 보장한다.
+        // 동일 PendingIntent 재호출은 안전(구독 교체).
+        DrivingDetection.register(applicationContext)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -82,16 +95,24 @@ class MainActivity : FlutterActivity() {
                         result.success(outcome)
                     }
                     "testMotionTrigger" -> {
-                        // 테스트용: BT 연결 해제를 시뮬레이션하여 모션 감지 서비스 시작
-                        val serviceIntent = Intent(this@MainActivity, MotionDetectionService::class.java)
-                        runCatching {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                startForegroundService(serviceIntent)
-                            } else {
-                                startService(serviceIntent)
+                        // 테스트용: BT 연결 해제를 시뮬레이션하여 모션 감지 서비스 시작.
+                        // 디버그 빌드에서만 동작 — 릴리스에선 BT 끊김 게이트를 우회하는 이
+                        // 경로가 노출되지 않도록 차단한다(개발/QA 전용).
+                        val debuggable = (applicationInfo.flags and
+                            android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                        if (debuggable) {
+                            val serviceIntent = Intent(this@MainActivity, MotionDetectionService::class.java)
+                            runCatching {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    startForegroundService(serviceIntent)
+                                } else {
+                                    startService(serviceIntent)
+                                }
                             }
+                            result.success(null)
+                        } else {
+                            result.notImplemented()
                         }
-                        result.success(null)
                     }
                     "getPairedDevices" -> {
                         // 이미 페어링된 BT 기기 목록만 반환한다 (스캔·새 연결 없음).
@@ -133,6 +154,29 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
 
+                    // ── 차량 자동 학습 엔드포인트 ──────────────────────────────
+                    "ensureDrivingDetection" -> {
+                        // 온보딩에서 활동인식 권한을 허용한 직후 호출 → 즉시 구독 등록.
+                        DrivingDetection.register(applicationContext)
+                        result.success(DrivingDetection.hasPermission(this@MainActivity))
+                    }
+                    "getLearnedCar" -> {
+                        val mac = SecurePrefsHelper.getLearnedCarId(this@MainActivity)
+                        if (mac == null) {
+                            result.success(null)
+                        } else {
+                            val name = SecurePrefsHelper.getLearnedCarName(this@MainActivity)
+                                ?: "내 차"
+                            result.success(mapOf("mac" to mac, "name" to name))
+                        }
+                    }
+                    "resetCarLearning" -> {
+                        SecurePrefsHelper.resetCarLearning(this@MainActivity)
+                        // 묵은 알림 라치가 리셋 후 첫 발사를 막지 않도록 함께 해제.
+                        SharedPrefsHelper.clearParkingNotificationLatch(this@MainActivity)
+                        result.success(null)
+                    }
+
                     else -> result.notImplemented()
                 }
             }
@@ -150,8 +194,9 @@ class MainActivity : FlutterActivity() {
      *
      * ## 사용 용도
      * 설정 화면의 '알림이 오지 않나요?(수동 설정)' 바텀시트에서 사용자가 '내 차'로
-     * 태깅할 기기를 고르는 용도. 태깅된 MAC 은 `manual_car_id` 키로 저장되어
-     * [BluetoothDisconnectReceiver.isCarDevice] 의 0단계 바이패스에 사용된다.
+     * 태깅할 기기를 고르는 용도. 태깅된 MAC 은 암호화 저장소에 저장되어
+     * [BluetoothDisconnectReceiver.resolveTargetCarMac] 에서 자동 학습보다 우선하는
+     * 수동 타깃 MAC 으로 사용된다.
      *
      * ## 중복 연결 가드
      * - 이 메서드는 `BluetoothAdapter.bondedDevices` 만 조회한다.

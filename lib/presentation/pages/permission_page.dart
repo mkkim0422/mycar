@@ -1,5 +1,6 @@
 import 'package:app_settings/app_settings.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -67,6 +68,17 @@ class _PermissionPageState extends State<PermissionPage> {
     if (!mounted) return;
     final notificationStatus = await Permission.notification.request();
     if (!mounted) return;
+    // Android 10+(API 29): 활동 인식 — "내 차 BT"를 운전 중 연결 여부로 자동 학습.
+    // 거부해도 다른 기능은 동작하므로 denied 목록에는 넣지 않는다(선택 권한).
+    // 'ar_permission_asked' 를 기록해 기존 사용자 마이그레이션 경로(main.dart)와
+    // 중복 요청되지 않게 한다.
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('ar_permission_asked', true);
+    await Permission.activityRecognition.request();
+    if (!mounted) return;
+    // 권한 허용 직후 운전 감지 구독을 등록한다(미허용 시 네이티브에서 no-op).
+    await _ensureDrivingDetection();
+    if (!mounted) return;
 
     setState(() => _busy = false);
 
@@ -119,6 +131,17 @@ class _PermissionPageState extends State<PermissionPage> {
     }
 
     await _markDoneAndProceed();
+  }
+
+  /// 네이티브에 운전 감지(Activity Recognition) 구독 등록을 요청한다.
+  /// 권한 미허용 시 네이티브가 조용히 무시하므로 실패해도 안전.
+  static const _widgetChannel = MethodChannel('com.snappark/widget');
+  Future<void> _ensureDrivingDetection() async {
+    try {
+      await _widgetChannel.invokeMethod<bool>('ensureDrivingDetection');
+    } catch (_) {
+      // 구버전/구글 플레이 서비스 부재 등 — 무시(학습만 비활성, 다른 기능 정상).
+    }
   }
 
   Future<void> _markDoneAndProceed() async {
@@ -301,6 +324,12 @@ class _PermissionPageState extends State<PermissionPage> {
             icon: Icons.bluetooth_rounded,
             title: '블루투스',
             desc: '차량 블루투스 해제 감지를 위해 필요합니다',
+          ),
+          const SizedBox(height: 20),
+          const _PermissionItem(
+            icon: Icons.directions_car_rounded,
+            title: '활동 인식',
+            desc: '운전 여부를 감지해 내 차 블루투스만 자동으로 학습합니다',
           ),
           const SizedBox(height: 20),
           const _PermissionItem(
