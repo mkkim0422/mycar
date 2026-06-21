@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:app_settings/app_settings.dart';
 import 'package:camera/camera.dart';
@@ -7,7 +8,6 @@ import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 
 /// 주차 위치 등록 — 순정 카메라 화면 (V11.4 = V11.3 + 번호판 인접 dropout 강화).
@@ -57,6 +57,11 @@ class _CameraScreenState extends State<CameraScreen>
   double _currentZoom = 1.0;
   double _baseScaleZoom = 1.0; // onScaleStart 시 _currentZoom 스냅샷
 
+  // ── 탭 포커스 ─────────────────────────────────────────────────────────────
+  /// 사용자가 탭한 화면 좌표(포커스 링 표시용). null 이면 숨김.
+  Offset? _focusIndicator;
+  Timer? _focusTimer; // 포커스 링 자동 숨김 타이머
+
   // ── 좌표 측정 + AR 상태 ────────────────────────────────────────────────────
   final _previewContainerKey = GlobalKey();
   Rect? _arBox;
@@ -65,6 +70,19 @@ class _CameraScreenState extends State<CameraScreen>
   String? _lastMatchedFloorNum; // '1'~'9' / null
   double _lastUprightW = 0;
   double _lastUprightH = 0;
+
+  /// boundingBox(OCR 좌표) → 프리뷰(cov) 좌표로 옮길 때 더하는 오프셋(업라이트).
+  /// 가운데 crop 경로에서 crop 영역의 좌상단 위치. 그 외 경로는 0.
+  double _ocrOffX = 0;
+  double _ocrOffY = 0;
+
+  /// 이번 프레임을 가이드 영역으로 crop 해 보냈는지. true 면 가이드 교차 필터를
+  /// 건너뛴다(crop 자체가 가이드 영역이라 들어온 라인이 곧 가이드 내 라인).
+  bool _ocrCroppedToGuide = false;
+
+  /// ML Kit 이 본 입력 이미지(업라이트)의 중심 — boundingBox 와 같은 좌표계.
+  /// "가운데 번호 우선 선택"의 거리 기준점.
+  Offset _ocrCenter = Offset.zero;
 
   // ── 상수 ───────────────────────────────────────────────────────────────────
   static const double _guideBoxWidth = 280.0;
@@ -82,6 +100,18 @@ class _CameraScreenState extends State<CameraScreen>
   String? _stableCandidate;
   int _stableCount = 0;
   static const int _stabilityThreshold = 3;
+
+  /// OCR 프레임 다운스케일 배율(줌 경로 전용). 2 = 가로·세로 1/2.
+  /// 2×2 평균 샘플링이라 글자 경계가 보존된다.
+  static const int _ocrDownscale = 2;
+
+  /// 일반(비줌) 경로에서 ML Kit 에 보낼 **가운데 crop** 비율(업라이트 기준).
+  /// 멀리서 작은 번호도 픽셀을 유지하도록 **풀해상도 그대로** 가운데만 잘라 보낸다
+  /// (다운스케일 안 함). 주변(차·옆 표지판)이 빠져 가운데 번호가 자연히 선택된다.
+  /// 가이드 박스(가로 ~0.59 · 세로 ~0.19)를 넉넉히 포함해 가까이서 꽉 채워도
+  /// 글자가 잘리지 않는다.
+  static const double _ocrCropFracW = 0.8;
+  static const double _ocrCropFracH = 0.5;
 
   // ── 정규식 ─────────────────────────────────────────────────────────────────
   static final _alphaNumStrict =
@@ -136,6 +166,7 @@ class _CameraScreenState extends State<CameraScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _focusTimer?.cancel();
     _stopStreamSafely();
     _recognizer?.close();
     _controller?.dispose();
@@ -222,7 +253,9 @@ class _CameraScreenState extends State<CameraScreen>
             : ImageFormatGroup.bgra8888,
       );
       await controller.initialize();
-      _recognizer ??= TextRecognizer(script: TextRecognitionScript.korean);
+      // 구역번호는 영문+숫자(B2, A04, 30)뿐이라 기본(라틴) 모델로 충분하고
+      // 한국어 모델보다 인식이 빠르다. 한글 안내판은 인식 자체를 안 해 노이즈도 감소.
+      _recognizer ??= TextRecognizer();
       if (!mounted) {
         await controller.dispose();
         return;
@@ -239,6 +272,17 @@ class _CameraScreenState extends State<CameraScreen>
         _minZoom = 1.0;
         _maxZoom = 1.0;
         _currentZoom = 1.0;
+      }
+      // 가운데(번호가 오는 곳)에 초점·노출 고정 — 멀리서 차+기둥을 함께 잡을 때
+      // 카메라가 가까운 차/배경에 초점을 빼앗겨 가운데 기둥 번호가 흐려져 인식이
+      // 안 되던 문제 방지. 사용자가 화면을 탭하면 그 지점으로 다시 잡는다(_onTapFocus).
+      try {
+        await controller.setFocusMode(FocusMode.auto);
+        await controller.setFocusPoint(const Offset(0.5, 0.5));
+        await controller.setExposureMode(ExposureMode.auto);
+        await controller.setExposurePoint(const Offset(0.5, 0.5));
+      } catch (e) {
+        debugPrint('[Camera] 중앙 초점 설정 실패: $e');
       }
       // initialize 중에 lifecycle 이 끼어들어서 기존 controller 가 떨어져 나갔다면
       // 새로 만든 것도 stale 이 아니지만, 안전을 위해 기존 controller 가 살아있다면
@@ -316,20 +360,8 @@ class _CameraScreenState extends State<CameraScreen>
       final recognized = await recognizer.processImage(input);
       if (!mounted || _isCapturing || _popped) return;
 
-      final int sensorDeg = controller.description.sensorOrientation;
-      final bool swap = sensorDeg == 90 || sensorDeg == 270;
-      // _currentZoom > 1.0 이면 NV21 이 중앙 crop 되어 ML Kit 에 전달됐으므로
-      // boundingBox 좌표계도 crop 크기 기준이다. _transformBox 의 scale 계산이
-      // 일치하도록 _lastUpright 도 crop 크기로 맞춘다.
-      int effectiveW = image.width;
-      int effectiveH = image.height;
-      if (_currentZoom > 1.05) {
-        effectiveW = (image.width / _currentZoom).round() & ~1;
-        effectiveH = (image.height / _currentZoom).round() & ~1;
-      }
-      _lastUprightW = (swap ? effectiveH : effectiveW).toDouble();
-      _lastUprightH = (swap ? effectiveW : effectiveH).toDouble();
-
+      // 좌표 변환 파라미터(_lastUprightW/H, _ocrOffX/Y, _ocrCroppedToGuide)는
+      // _buildInputImage 가 이번 프레임의 crop/downscale 에 맞춰 이미 세팅했다.
       final winner = _extractParse(recognized);
       if (winner == null) {
         _emptyFrameCount++;
@@ -434,7 +466,10 @@ class _CameraScreenState extends State<CameraScreen>
     }
 
     // ── 1차: 가이드 박스 영역 내 lines 만 필터 ──────────────────────────
-    final guideInputRect = _guideBoxInInputCoords();
+    // 이미 가이드 영역으로 crop 해 보낸 경우(_ocrCroppedToGuide)는 들어온 라인이
+    // 곧 가이드 내 라인이므로 교차 필터를 건너뛰고 전체 라인으로 바로 파싱한다.
+    final guideInputRect =
+        _ocrCroppedToGuide ? null : _guideBoxInInputCoords();
     if (guideInputRect != null) {
       final inGuide = allLines.where((line) {
         final b = line.boundingBox;
@@ -506,8 +541,12 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
-  /// [Combine & Parse] — lines 노이즈 필터 → 공백 결합 → STEP1 floor 도려내기 →
-  /// STEP2 공백 압착 + strict zone 검사.
+  /// lines → zone 파싱.
+  ///  1차: 전체를 읽기순으로 결합해 zone 검사 (단일 번호/분할 자릿수/번호+층 등
+  ///       기존이 처리하던 모든 케이스 — **동작 동일, 회귀 없음**).
+  ///  2차: 1차 실패(여러 글자 섞여 결합이 패턴에 안 맞음) 시에만, 근접 라인끼리
+  ///       클러스터로 묶어 각각 검사하고 **화면 중심에 가장 가까운** zone 을 고른다.
+  ///       (멀리서 차+기둥을 함께 잡아 다른 번호까지 들어올 때 가운데 번호 우선.)
   _ParseResult? _parseLines(List<TextLine> lines) {
     // ── 노이즈 필터 ──────────────────────────────────────────────────────
     final cleanLines = <TextLine>[];
@@ -528,14 +567,11 @@ class _CameraScreenState extends State<CameraScreen>
     }
     if (cleanLines.isEmpty) return null;
 
-    // ── 공백 + 결합 ─────────────────────────────────────────────────────
-    final combined = cleanLines.map((l) => l.text.trim()).join(' ');
-
-    // ── STEP 1: 층수 도려내기 ──────────────────────────────────────────
+    // 층수는 전체 시야에서 한 번만 추출 — 어느 zone 이 뽑히든 공통 적용.
     String? floorType;
     String? floorNum;
-    String remaining = combined;
-    final fm = _floorPattern.firstMatch(combined);
+    final fm = _floorPattern
+        .firstMatch(cleanLines.map((l) => l.text.trim()).join(' '));
     if (fm != null) {
       final matched = fm.group(0)!.toUpperCase(); // "B2" or "2F"
       if (matched.startsWith('B')) {
@@ -545,35 +581,104 @@ class _CameraScreenState extends State<CameraScreen>
         floorType = '지상';
         floorNum = matched.substring(0, matched.length - 1);
       }
-      // 모든 floor 매치 제거 — 같은 시야에 다른 floor 잔재가 zone 으로 합쳐지는 사고 차단
-      remaining = combined.replaceAll(_floorPattern, '');
     }
 
-    // ── STEP 2: 공백 압착 + strict zone 검사 ──────────────────────────
-    final compact = remaining.replaceAll(RegExp(r'\s+'), '');
+    // ── 1차: 전체 결합 (기존 동작 — 회귀 0) ──────────────────────────────
+    // 읽기순으로 정렬 후 결합. ML Kit 순서는 좌→우 보장이 안 돼 "3" "0" 이
+    // "0 3"→"03" 처럼 뒤집히던 사고를 방지(boundingBox 위치로 재정렬).
+    final byReading = [...cleanLines]..sort(_readingOrderCompare);
+    final zoneAll = _matchZone(byReading.map((l) => l.text.trim()).join(' '));
+    if (zoneAll != null) {
+      return _ParseResult(
+        floorType: floorType,
+        floorNum: floorNum,
+        zone: zoneAll,
+        box: _unionBox(byReading),
+      );
+    }
+
+    // ── 2차: 1차 실패 → 클러스터별 검사 후 중심 최근접 zone 선택 ──────────
+    final clusters = _clusterLines(cleanLines);
+    if (clusters.length <= 1) return null; // 1개면 1차와 동일 → 이미 실패
+    _ParseResult? best;
+    double bestDist = double.infinity;
+    for (final cluster in clusters) {
+      final sorted = [...cluster]..sort(_readingOrderCompare);
+      final zone = _matchZone(sorted.map((l) => l.text.trim()).join(' '));
+      if (zone == null) continue;
+      final box = _unionBox(sorted);
+      final d = (box.center - _ocrCenter).distanceSquared;
+      if (d < bestDist) {
+        bestDist = d;
+        best = _ParseResult(
+          floorType: floorType,
+          floorNum: floorNum,
+          zone: zone,
+          box: box,
+        );
+      }
+    }
+    return best;
+  }
+
+  /// floor 제거 → 공백 압착 → strict zone 패턴 검사. 매치 없으면 null.
+  String? _matchZone(String text) {
+    final compact =
+        text.replaceAll(_floorPattern, '').replaceAll(RegExp(r'\s+'), '');
     if (compact.isEmpty) return null;
+    if (_alphaNumStrict.hasMatch(compact)) return compact.toUpperCase();
+    if (_zoneNumericStrict.hasMatch(compact)) return compact;
+    return null;
+  }
 
-    String? zone;
-    if (_alphaNumStrict.hasMatch(compact)) {
-      zone = compact.toUpperCase();
-    } else if (_zoneNumericStrict.hasMatch(compact)) {
-      zone = compact;
-    } else {
-      return null;
+  /// 읽는 순서 비교자(같은 줄대면 왼→오른, 줄이 다르면 위→아래).
+  static int _readingOrderCompare(TextLine a, TextLine b) {
+    final ab = a.boundingBox;
+    final bb = b.boundingBox;
+    final rowBand = (ab.height < bb.height ? ab.height : bb.height) * 0.5;
+    if ((ab.center.dy - bb.center.dy).abs() <= rowBand) {
+      return ab.left.compareTo(bb.left);
     }
+    return ab.center.dy.compareTo(bb.center.dy);
+  }
 
-    // ── AR 박스 — clean lines 의 union ─────────────────────────────────
-    Rect box = cleanLines.first.boundingBox;
-    for (int i = 1; i < cleanLines.length; i++) {
-      box = box.expandToInclude(cleanLines[i].boundingBox);
+  static Rect _unionBox(List<TextLine> lines) {
+    Rect box = lines.first.boundingBox;
+    for (int i = 1; i < lines.length; i++) {
+      box = box.expandToInclude(lines[i].boundingBox);
     }
+    return box;
+  }
 
-    return _ParseResult(
-      floorType: floorType,
-      floorNum: floorNum,
-      zone: zone,
-      box: box,
-    );
+  /// 근접 라인끼리 묶는다(세로로 겹치는 같은 줄대 + 가로 간격이 글자 높이의
+  /// ~1.5배 이내). "A" "30" 처럼 한 라벨이 떨어져 잡혀도 한 클러스터가 되도록
+  /// 간격을 넉넉히 둔다(과합치기는 1차와 동일해져 무해, 과분리만 피하면 됨).
+  static List<List<TextLine>> _clusterLines(List<TextLine> lines) {
+    final clusters = <List<TextLine>>[];
+    for (final line in lines) {
+      final lb = line.boundingBox;
+      bool placed = false;
+      for (final cluster in clusters) {
+        for (final m in cluster) {
+          final mb = m.boundingBox;
+          final vOverlap = lb.bottom > mb.top && mb.bottom > lb.top;
+          final gapTol = (lb.height < mb.height ? lb.height : mb.height) * 1.5;
+          final double hGap = lb.left > mb.right
+              ? lb.left - mb.right
+              : mb.left > lb.right
+                  ? mb.left - lb.right
+                  : 0.0;
+          if (vOverlap && hGap <= gapTol) {
+            cluster.add(line);
+            placed = true;
+            break;
+          }
+        }
+        if (placed) break;
+      }
+      if (!placed) clusters.add([line]);
+    }
+    return clusters;
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -582,36 +687,77 @@ class _CameraScreenState extends State<CameraScreen>
 
   InputImage? _buildInputImage(CameraImage image, int sensorOrientation) {
     final InputImageRotation rotation = _degToRotation(sensorOrientation);
-    final Uint8List bytes;
+    final bool swap = sensorOrientation == 90 || sensorOrientation == 270;
+    final int srcW = image.width;
+    final int srcH = image.height;
+    // 회전 후(업라이트) 풀 프레임 크기 — 프리뷰가 cover 로 보여주는 좌표계.
+    final double uwFull = (swap ? srcH : srcW).toDouble();
+    final double uhFull = (swap ? srcW : srcH).toDouble();
+
+    Uint8List bytes;
     final InputImageFormat format;
-    final int bytesPerRow;
-    int outW = image.width;
-    int outH = image.height;
+    int bytesPerRow;
+    int outW = srcW;
+    int outH = srcH;
+
+    // 좌표 변환 파라미터 기본값(최적화 없음): 풀 프레임이 프리뷰에 cover, 오프셋 0.
+    double covW = uwFull;
+    double covH = uhFull;
+    double offX = 0;
+    double offY = 0;
+    bool croppedToGuide = false;
+
     if (Platform.isAndroid) {
       final conv = _yuv420ToNv21(image);
       if (conv == null) return null;
-      // ── Digital zoom for ML Kit ──────────────────────────────────────
-      // camera_android_camerax 의 ImageAnalysis use case 는 hardware zoom
-      // (setZoomLevel) 을 반영하지 않는다. preview/takePicture 만 줌된 영상을
-      // 받고 image stream 은 항상 wide sensor 영상을 받음. 사용자가 핀치로
-      // 줌 인 한 상태에서 OCR 도 같은 영역만 보도록 NV21 을 중앙 crop.
+      bytes = conv;
+
       if (_currentZoom > 1.05) {
-        final cropped = _cropNv21Center(
-          conv,
-          image.width,
-          image.height,
-          _currentZoom,
-        );
+        // ── 줌 경로 ──────────────────────────────────────────────────────
+        // 하드웨어 줌과 같은 중앙만 crop 후 다운스케일. 프리뷰가 crop 영역을
+        // 꽉 채우므로 cov = (다운스케일된) 영상 크기, 오프셋 0.
+        final cropped = _cropNv21Center(conv, srcW, srcH, _currentZoom);
         if (cropped != null) {
           bytes = cropped.bytes;
           outW = cropped.width;
           outH = cropped.height;
-        } else {
-          bytes = conv; // crop 실패 시 원본 사용 (안전 폴백)
         }
+        if (_ocrDownscale > 1) {
+          final ds = _downscaleNv21Gray(bytes, outW, outH, _ocrDownscale);
+          if (ds != null) {
+            bytes = ds.bytes;
+            outW = ds.width;
+            outH = ds.height;
+          }
+        }
+        covW = (swap ? outH : outW).toDouble();
+        covH = (swap ? outW : outH).toDouble();
       } else {
-        bytes = conv;
+        // ── 일반 경로: 가운데 영역만 **풀해상도** crop ───────────────────
+        // 멀리서 작은 번호도 픽셀을 유지(다운스케일 안 함)하고, 주변이 빠져
+        // 가운데 번호가 선택된다. 프리뷰는 풀 프레임을 보여주므로 cov = 풀
+        // 업라이트, 오프셋 = crop 좌상단(업라이트). 가이드보다 넉넉해 안 잘림.
+        final int cropSW =
+            (swap ? srcW * _ocrCropFracH : srcW * _ocrCropFracW).round() & ~1;
+        final int cropSH =
+            (swap ? srcH * _ocrCropFracW : srcH * _ocrCropFracH).round() & ~1;
+        if (cropSW >= 32 && cropSH >= 32 && cropSW <= srcW && cropSH <= srcH) {
+          final int cropX = ((srcW - cropSW) ~/ 2) & ~1;
+          final int cropY = ((srcH - cropSH) ~/ 2) & ~1;
+          final cropped =
+              _cropNv21Rect(conv, srcW, srcH, cropX, cropY, cropSW, cropSH);
+          if (cropped != null) {
+            bytes = cropped.bytes;
+            outW = cropped.width;
+            outH = cropped.height;
+            offX = uwFull * (1 - _ocrCropFracW) / 2;
+            offY = uhFull * (1 - _ocrCropFracH) / 2;
+            croppedToGuide = true;
+          }
+        }
+        // crop 실패 시 풀 프레임 폴백 — cov = 풀 업라이트(기본값), 오프셋 0.
       }
+
       format = InputImageFormat.nv21;
       bytesPerRow = outW;
     } else {
@@ -620,6 +766,19 @@ class _CameraScreenState extends State<CameraScreen>
       format = InputImageFormat.bgra8888;
       bytesPerRow = image.planes.first.bytesPerRow;
     }
+
+    // 좌표 변환 단일 출처 — _transformBox / _guideBoxInInputCoords 가 사용.
+    _lastUprightW = covW;
+    _lastUprightH = covH;
+    _ocrOffX = offX;
+    _ocrOffY = offY;
+    _ocrCroppedToGuide = croppedToGuide;
+    // boundingBox 좌표계(= ML Kit 입력의 업라이트) 중심. 2차 파싱의 거리 기준.
+    _ocrCenter = Offset(
+      (swap ? outH : outW) / 2.0,
+      (swap ? outW : outH) / 2.0,
+    );
+
     return InputImage.fromBytes(
       bytes: bytes,
       metadata: InputImageMetadata(
@@ -629,6 +788,83 @@ class _CameraScreenState extends State<CameraScreen>
         bytesPerRow: bytesPerRow,
       ),
     );
+  }
+
+  /// NV21 을 짝수 정렬 사각형으로 crop 한다(Y + interleaved VU). 풀해상도 유지.
+  /// [cropX]/[cropY]/[cropW]/[cropH] 는 모두 짝수여야 한다(YUV 4:2:0 정렬).
+  static _CropResult? _cropNv21Rect(
+    Uint8List nv21,
+    int srcW,
+    int srcH,
+    int cropX,
+    int cropY,
+    int cropW,
+    int cropH,
+  ) {
+    if (cropW < 32 || cropH < 32) return null;
+    if (cropX < 0 || cropY < 0 || cropX + cropW > srcW || cropY + cropH > srcH) {
+      return null;
+    }
+    final int ySize = cropW * cropH;
+    final int vuSize = cropW * cropH ~/ 2;
+    final out = Uint8List(ySize + vuSize);
+
+    int dst = 0;
+    for (int row = 0; row < cropH; row++) {
+      final int srcStart = (cropY + row) * srcW + cropX;
+      out.setRange(dst, dst + cropW, nv21, srcStart);
+      dst += cropW;
+    }
+    final int vuSrcOffset = srcW * srcH;
+    for (int row = 0; row < cropH ~/ 2; row++) {
+      final int srcStart = vuSrcOffset + (cropY ~/ 2 + row) * srcW + cropX;
+      out.setRange(dst, dst + cropW, nv21, srcStart);
+      dst += cropW;
+    }
+    return _CropResult(bytes: out, width: cropW, height: cropH);
+  }
+
+  /// NV21 을 [factor] 배(정수) 축소한 **회색조** NV21 을 만든다.
+  ///
+  /// 텍스트 인식은 휘도(Y)만으로 충분하므로 Y 만 축소하고 VU(채도) 평면은
+  /// 중립 회색(128)으로 채워 유효한 NV21 을 유지한다. factor=2 면 픽셀 1/4 →
+  /// ML Kit 약 4배 빠름. 너무 작아지면 null(원본 폴백).
+  ///
+  /// 샘플링은 **box 평균**(factor×factor 블록 평균)이다. 단순 최근접 샘플링은
+  /// 계단현상(앨리어싱)으로 숫자가 뭉개져 3↔8, 0↔8 오인식·미검출을 유발했는데,
+  /// 평균은 글자 경계를 매끈하게 보존해 같은 속도로 인식 정확도를 끌어올린다.
+  static _CropResult? _downscaleNv21Gray(
+    Uint8List nv21,
+    int srcW,
+    int srcH,
+    int factor,
+  ) {
+    if (factor <= 1) return null;
+    final int newW = (srcW ~/ factor) & ~1; // 짝수 정렬 (YUV 4:2:0)
+    final int newH = (srcH ~/ factor) & ~1;
+    if (newW < 32 || newH < 32) return null;
+    final int ySize = newW * newH;
+    final int vuSize = newW * newH ~/ 2;
+    final out = Uint8List(ySize + vuSize);
+    final int area = factor * factor;
+    final int half = area ~/ 2; // 반올림용
+    int dst = 0;
+    for (int row = 0; row < newH; row++) {
+      final int srcRow0 = (row * factor) * srcW;
+      for (int col = 0; col < newW; col++) {
+        final int srcCol0 = col * factor;
+        int sum = 0;
+        for (int dy = 0; dy < factor; dy++) {
+          final int base = srcRow0 + dy * srcW + srcCol0;
+          for (int dx = 0; dx < factor; dx++) {
+            sum += nv21[base + dx];
+          }
+        }
+        out[dst++] = (sum + half) ~/ area; // 블록 평균(반올림)
+      }
+    }
+    out.fillRange(ySize, ySize + vuSize, 128); // 채도 중립(회색)
+    return _CropResult(bytes: out, width: newW, height: newH);
   }
 
   /// NV21 영상을 zoom 배율만큼 중앙 crop.
@@ -756,11 +992,13 @@ class _CameraScreenState extends State<CameraScreen>
     final double scale = scaleX > scaleY ? scaleX : scaleY;
     final double offsetX = (containerSize.width - _lastUprightW * scale) / 2.0;
     final double offsetY = (containerSize.height - _lastUprightH * scale) / 2.0;
+    // raw(boundingBox)는 OCR 입력(crop) 좌표 → _ocrOff 로 풀 프레임(cov) 좌표로
+    // 옮긴 뒤 cover scale 적용. crop 안 한 경로는 _ocrOff=0 이라 그대로다.
     return Rect.fromLTRB(
-      raw.left * scale + offsetX,
-      raw.top * scale + offsetY,
-      raw.right * scale + offsetX,
-      raw.bottom * scale + offsetY,
+      (raw.left + _ocrOffX) * scale + offsetX,
+      (raw.top + _ocrOffY) * scale + offsetY,
+      (raw.right + _ocrOffX) * scale + offsetX,
+      (raw.bottom + _ocrOffY) * scale + offsetY,
     );
   }
 
@@ -891,6 +1129,42 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   // ──────────────────────────────────────────────────────────────────────────
+  //  Tap to focus — 갤럭시 기본 카메라처럼 탭한 지점에 초점/노출
+  // ──────────────────────────────────────────────────────────────────────────
+
+  Future<void> _onTapFocus(TapUpDetails d) async {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized || _isCapturing || _popped) return;
+    final renderBox =
+        _previewContainerKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox == null || !renderBox.hasSize) return;
+    final size = renderBox.size;
+    if (size.width <= 0 || size.height <= 0) return;
+
+    // 탭 지점을 프리뷰 정규화 좌표 [0,1] 로 변환해 초점/노출 지점 지정.
+    final double nx = (d.localPosition.dx / size.width).clamp(0.0, 1.0);
+    final double ny = (d.localPosition.dy / size.height).clamp(0.0, 1.0);
+    final point = Offset(nx, ny);
+
+    try {
+      // auto 모드로 전환해 지정 지점에 즉시 재초점(고정 모드면 한 번만 잡고 멈춤).
+      await c.setFocusMode(FocusMode.auto);
+      await c.setFocusPoint(point);
+      await c.setExposurePoint(point);
+    } catch (e) {
+      debugPrint('[Camera] 탭 포커스 실패: $e');
+    }
+
+    // 포커스 링 표시 후 1초 뒤 자동 숨김.
+    if (!mounted) return;
+    setState(() => _focusIndicator = d.localPosition);
+    _focusTimer?.cancel();
+    _focusTimer = Timer(const Duration(milliseconds: 1000), () {
+      if (mounted) setState(() => _focusIndicator = null);
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
   //  Build
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -905,6 +1179,7 @@ class _CameraScreenState extends State<CameraScreen>
       body: GestureDetector(
         onScaleStart: zoomSupported ? _onScaleStart : null,
         onScaleUpdate: zoomSupported ? _onScaleUpdate : null,
+        onTapUp: _onTapFocus,
         child: Stack(
           key: _previewContainerKey,
           fit: StackFit.expand,
@@ -925,6 +1200,22 @@ class _CameraScreenState extends State<CameraScreen>
                 child: CustomPaint(
                   size: Size.infinite,
                   painter: _SingleArBoxPainter(box: _arBox!),
+                ),
+              ),
+            // 탭 포커스 링 — 탭 지점에 잠깐 표시.
+            if (_focusIndicator != null)
+              Positioned(
+                left: _focusIndicator!.dx - 36,
+                top: _focusIndicator!.dy - 36,
+                child: IgnorePointer(
+                  child: Container(
+                    width: 72,
+                    height: 72,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2),
+                    ),
+                  ),
                 ),
               ),
             // 줌 인디케이터 — 셔터 위쪽 중앙, 1.0 보다 큰 줌일 때만 노출.
@@ -1225,28 +1516,126 @@ class _CropResult {
   });
 }
 
-/// EXIF 스트립 + 저장 (Isolate 실행).
+/// EXIF(GPS 위치정보 포함) 스트립 + 저장 (Isolate 실행).
 ///
-/// 디코드/인코드 비용은 800만 화소 기준 300~500ms (S24 Galaxy). 메인 스레드를
-/// 막지 않도록 compute()로 격리. 실패 시 원본 그대로 복사하여 저장 자체는 보장.
+/// 과거엔 사진 전체를 디코드→재인코드(quality 92)하며 EXIF 를 지웠는데, 순수
+/// Dart 디코드/인코드는 800만 화소에서 300~500ms(S24), 구형 폰은 1~2초까지 걸려
+/// "사진 저장 중..." 버퍼의 주범이었고 재압축으로 화질 손해도 있었다.
+///
+/// JPEG 의 GPS 좌표는 APP1(Exif) 세그먼트에만 들어있으므로, 픽셀은 그대로 두고
+/// 그 마커 세그먼트만 잘라내면 **무손실 + 수 ms** 로 같은 목적(위치 제거)을
+/// 달성한다. 구조 파싱이 예상과 어긋나면 원본을 복사해 저장 자체는 보장한다.
 void _stripExifAndSave(_CopyParams p) {
   try {
     final bytes = File(p.src).readAsBytesSync();
-    final decoded = img.decodeImage(bytes);
-    if (decoded == null) {
-      File(p.src).copySync(p.dst);
-      return;
-    }
-    // 모든 EXIF 디렉토리(GPS, IFD0, EXIF, Interop) 제거.
-    decoded.exif.clear();
-    final out = img.encodeJpg(decoded, quality: 92);
-    File(p.dst).writeAsBytesSync(out, flush: true);
+    final stripped = _stripJpegExif(bytes);
+    File(p.dst).writeAsBytesSync(stripped ?? bytes, flush: true);
   } catch (_) {
-    // 어떤 이유든 디코드/인코드 실패 시 원본 복사 폴백.
+    // 어떤 이유든 실패 시 원본 복사 폴백.
     try {
       File(p.src).copySync(p.dst);
     } catch (_) {}
   }
+}
+
+/// JPEG 바이트에서 위치정보가 든 APP1(Exif/XMP) 세그먼트를 제거하되,
+/// **사진 방향(Orientation)** 만은 보존한 새 바이트를 돌려준다.
+///
+/// 폰 카메라는 픽셀을 누운 채로 저장하고 "몇 도 돌려 봐라"를 EXIF Orientation
+/// 태그로 표시한다. APP1 을 통째로 버리면 그 태그까지 사라져 갤러리가 사진을
+/// 돌려서 보여준다. 그래서 원본 Orientation 값만 추출해, GPS·기기모델·시간 등
+/// 나머지는 전부 버린 **방향만 담은 최소 Exif** 를 새로 끼워 넣는다.
+///
+/// JPEG 가 아니거나 구조가 예상과 다르면 null → 호출부가 원본 폴백.
+Uint8List? _stripJpegExif(Uint8List b) {
+  // SOI 마커(FF D8) 확인.
+  if (b.length < 4 || b[0] != 0xFF || b[1] != 0xD8) return null;
+
+  int orientation = 0; // 0 = 못 찾음(=방향 태그 추가 안 함)
+  final kept = BytesBuilder(); // SOI 다음 세그먼트들(APP1 제외) + SOS 이후 전체
+  var i = 2;
+  while (i + 1 < b.length) {
+    if (b[i] != 0xFF) return null; // 마커 정렬 깨짐 → 폴백
+    final marker = b[i + 1];
+    // SOS(FF DA): 이후는 압축 영상 데이터 → 통째로 복사하고 종료.
+    if (marker == 0xDA) {
+      kept.add(b.sublist(i));
+      break;
+    }
+    if (i + 3 >= b.length) return null;
+    final segLen = (b[i + 2] << 8) | b[i + 3]; // 길이 2바이트(자신 포함)
+    final segEnd = i + 2 + segLen;
+    if (segLen < 2 || segEnd > b.length) return null;
+    if (marker == 0xE1) {
+      // APP1(Exif/XMP, GPS 포함) → 버린다. 단 Exif 면 방향 값만 빼둔다.
+      final o = _readExifOrientation(b, i + 4, segEnd);
+      if (o != null) orientation = o;
+    } else {
+      // 그 외(APP0 JFIF, APP2 ICC 컬러프로파일 등 화질·호환에 필요)는 보존.
+      kept.add(b.sublist(i, segEnd));
+    }
+    i = segEnd;
+  }
+
+  final out = BytesBuilder();
+  out.addByte(0xFF);
+  out.addByte(0xD8);
+  if (orientation > 0) out.add(_buildOrientationExif(orientation));
+  out.add(kept.toBytes());
+  return out.toBytes();
+}
+
+/// APP1 payload([start], [end)) 에서 Exif Orientation(태그 0x0112) 값만 읽는다.
+/// Exif 가 아니거나(XMP 등) 태그가 없으면 null.
+int? _readExifOrientation(Uint8List b, int start, int end) {
+  // "Exif\0\0" 시그니처 확인.
+  if (end - start < 8) return null;
+  if (b[start] != 0x45 || b[start + 1] != 0x78 || b[start + 2] != 0x69 ||
+      b[start + 3] != 0x66 || b[start + 4] != 0x00 || b[start + 5] != 0x00) {
+    return null;
+  }
+  final tiff = start + 6;
+  if (end - tiff < 8) return null;
+  final bool little;
+  if (b[tiff] == 0x49 && b[tiff + 1] == 0x49) {
+    little = true; // "II"
+  } else if (b[tiff] == 0x4D && b[tiff + 1] == 0x4D) {
+    little = false; // "MM"
+  } else {
+    return null;
+  }
+  int u16(int p) =>
+      little ? (b[p] | (b[p + 1] << 8)) : ((b[p] << 8) | b[p + 1]);
+  int u32(int p) => little
+      ? (b[p] | (b[p + 1] << 8) | (b[p + 2] << 16) | (b[p + 3] << 24))
+      : ((b[p] << 24) | (b[p + 1] << 16) | (b[p + 2] << 8) | b[p + 3]);
+
+  final ifd0 = tiff + u32(tiff + 4);
+  if (ifd0 + 2 > end) return null;
+  final count = u16(ifd0);
+  var p = ifd0 + 2;
+  for (var k = 0; k < count; k++) {
+    if (p + 12 > end) return null;
+    if (u16(p) == 0x0112) return u16(p + 8); // Orientation: SHORT, 값은 p+8
+    p += 12;
+  }
+  return null;
+}
+
+/// Orientation 태그 하나만 담은 최소 Exif APP1 세그먼트를 만든다(리틀엔디안).
+Uint8List _buildOrientationExif(int orientation) {
+  return Uint8List.fromList(<int>[
+    0xFF, 0xE1, // APP1 마커
+    0x00, 0x22, // 세그먼트 길이 = 34 (자신 포함)
+    0x45, 0x78, 0x69, 0x66, 0x00, 0x00, // "Exif\0\0"
+    0x49, 0x49, 0x2A, 0x00, // TIFF: "II" + magic 42
+    0x08, 0x00, 0x00, 0x00, // IFD0 오프셋 = 8
+    0x01, 0x00, // 엔트리 1개
+    0x12, 0x01, 0x03, 0x00, // 태그 0x0112(Orientation), 타입 SHORT
+    0x01, 0x00, 0x00, 0x00, // count 1
+    orientation & 0xFF, (orientation >> 8) & 0xFF, 0x00, 0x00, // 값
+    0x00, 0x00, 0x00, 0x00, // 다음 IFD 없음
+  ]);
 }
 
 class _CornerFramePainter extends CustomPainter {
