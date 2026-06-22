@@ -852,6 +852,11 @@ class _CameraScreenState extends State<CameraScreen>
     // 등을 제거해 카카오톡 공유 시 위치 메타데이터 노출 차단.
     // 디코드 실패 시(드물게) 원본 단순 복사로 폴백 — 저장 자체는 보장.
     await compute(_stripExifAndSave, _CopyParams(tempPath, destPath));
+    // takePicture() 가 만든 캐시 원본을 삭제한다. 이 정리를 빠뜨리면 캡처본(temp)
+    // 과 최종본(dest) 이 둘 다 남아 "사진이 2장씩 저장된다" 는 증상이 발생한다.
+    try {
+      await File(tempPath).delete();
+    } catch (_) {}
     return destPath;
   }
 

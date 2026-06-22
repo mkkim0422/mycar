@@ -29,12 +29,15 @@ class ParkingRepository {
     try {
       final prefs = await SharedPreferences.getInstance();
       final json = data.toJson();
-      await prefs.setString(_kParkingDataKey, jsonEncode(json));
 
-      // 히스토리에 추가 (최신이 앞에, 최대 100건 유지)
+      // 히스토리를 parking_data 보다 **먼저** 로드한다. 순서를 바꾸면 첫 저장 시
+      // (히스토리 키가 없어) _loadHistory 의 마이그레이션 폴백이 방금 덮어쓴
+      // parking_data 를 다시 읽어와, 동일 레코드가 2건 들어가는 버그가 생긴다.
       final history = await _loadHistory(prefs);
       history.insert(0, json);
       if (history.length > 100) history.removeRange(100, history.length);
+
+      await prefs.setString(_kParkingDataKey, jsonEncode(json));
       await prefs.setString(_kParkingHistoryKey, jsonEncode(history));
     } catch (e) {
       debugPrint('[ParkingRepository] save() 실패: $e');
