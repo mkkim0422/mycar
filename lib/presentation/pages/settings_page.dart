@@ -241,6 +241,34 @@ class _SettingsPageState extends State<SettingsPage> {
 
   // ── 결제(광고 제거) ────────────────────────────────────────────────────
 
+  /// 결제 섹션 — 스토어에서 상품을 받아왔거나 이미 구매한 경우에만 노출.
+  ///
+  /// 판매자 계정/인앱 상품 미등록 상태에서는 섹션 자체를 숨겨 '결제 불가'
+  /// 스낵바를 볼 일이 없게 한다. 나중에 Play Console 에 `remove_ads` 상품을
+  /// 등록·활성화하면 앱 업데이트 없이 이 섹션이 자동으로 나타난다.
+  Widget _buildBillingSection() {
+    final billing = BillingService.instance;
+    return ValueListenableBuilder<bool>(
+      valueListenable: billing.ready, // 상품 조회 완료 시점에 재평가
+      builder: (_, __, ___) => ValueListenableBuilder<bool>(
+        valueListenable: billing.adRemoved,
+        builder: (_, removed, ___) {
+          if (!removed && billing.product == null) {
+            return const SizedBox.shrink();
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _SectionHeader(label: '결제'),
+              _SettingsCard(children: [_buildRemoveAdsRow()]),
+              const SizedBox(height: 28),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildRemoveAdsRow() {
     final billing = BillingService.instance;
     return ValueListenableBuilder<bool>(
@@ -284,7 +312,11 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _buyRemoveAds() async {
     final billing = BillingService.instance;
     if (billing.product == null) {
-      _showSnackBar('스토어 출시 후 이용할 수 있어요.');
+      // 앱 시작 시 조회가 실패했던 경우(일시적 오류/스토어 전파 지연) 복구.
+      await billing.refreshProductIfNeeded();
+    }
+    if (billing.product == null) {
+      _showSnackBar('지금은 결제를 불러올 수 없어요. 잠시 후 다시 시도해 주세요.');
       return;
     }
     final started = await billing.buyRemoveAds();
@@ -411,11 +443,8 @@ class _SettingsPageState extends State<SettingsPage> {
 
           const SizedBox(height: 28),
 
-          // ── 섹션: 결제 ──────────────────────────────────────────────
-          _SectionHeader(label: '결제'),
-          _SettingsCard(children: [_buildRemoveAdsRow()]),
-
-          const SizedBox(height: 28),
+          // ── 섹션: 결제 — 상품 조회 성공 또는 기구매 시에만 노출 ─────────
+          _buildBillingSection(),
 
           // ── 섹션 3: 앱 ─────────────────────────────────────────────────
           _SectionHeader(label: '앱'),
@@ -424,7 +453,8 @@ class _SettingsPageState extends State<SettingsPage> {
               _InfoRow(
                 icon: Icons.info_outline_rounded,
                 label: '버전',
-                value: '1.0.0',
+                // pubspec.yaml 의 version 과 함께 올릴 것.
+                value: '1.0.3',
               ),
               const _Divider(),
               _ActionRow(

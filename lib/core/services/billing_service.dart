@@ -80,6 +80,32 @@ class BillingService {
     ready.value = true;
   }
 
+  /// 상품 재조회 — [init] 시점 조회가 실패한 경우의 복구 경로.
+  ///
+  /// 앱 시작 시 일시적 네트워크 오류·스토어 전파 지연으로 상품을 못 받으면
+  /// [product] 가 앱 재시작 전까지 null 로 고정되는 문제가 있었다. 구매 시도
+  /// 직전에 이 메서드로 다시 조회해 재시작 없이 복구한다. 이미 조회돼
+  /// 있으면 no-op.
+  Future<void> refreshProductIfNeeded() async {
+    if (product != null) return;
+    bool available;
+    try {
+      available = await _iap.isAvailable();
+    } catch (_) {
+      available = false;
+    }
+    if (!available) return;
+    // init 이 스토어 불가로 조기 종료했던 경우 스트림 구독도 여기서 보강.
+    _sub ??= _iap.purchaseStream.listen(_onPurchases, onError: (_) {});
+    try {
+      final resp =
+          await _iap.queryProductDetails({AppConfig.removeAdsProductId});
+      if (resp.productDetails.isNotEmpty) {
+        product = resp.productDetails.first;
+      }
+    } catch (_) {}
+  }
+
   Future<void> _onPurchases(List<PurchaseDetails> purchases) async {
     for (final p in purchases) {
       if (p.productID != AppConfig.removeAdsProductId) continue;
