@@ -284,6 +284,14 @@ class _CameraScreenState extends State<CameraScreen>
       } catch (e) {
         debugPrint('[Camera] 중앙 초점 설정 실패: $e');
       }
+      // 플래시 기본값(auto)은 어두운 주차장에서 takePicture 마다 측광
+      // (precapture) 시퀀스를 돌려 1~2초 셔터랙을 만든다. 라이브 OCR 은 이미
+      // 무플래시 프리뷰 프레임으로 동작하므로 off 로 고정해 지연을 제거한다.
+      try {
+        await controller.setFlashMode(FlashMode.off);
+      } catch (e) {
+        debugPrint('[Camera] 플래시 off 설정 실패: $e');
+      }
       // initialize 중에 lifecycle 이 끼어들어서 기존 controller 가 떨어져 나갔다면
       // 새로 만든 것도 stale 이 아니지만, 안전을 위해 기존 controller 가 살아있다면
       // 정리 후 교체.
@@ -1013,7 +1021,8 @@ class _CameraScreenState extends State<CameraScreen>
 
     _isCapturing = true;
     if (mounted) setState(() => _statusMessage = '사진 저장 중...');
-    await HapticFeedback.mediumImpact();
+    // 셔터를 막지 않도록 햅틱은 대기하지 않는다.
+    unawaited(HapticFeedback.mediumImpact());
 
     String? tempPath;
     String? savedPath;

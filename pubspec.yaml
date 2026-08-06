@@ -1,7 +1,7 @@
 name: snappark
 description: SnapPark V2 - 주차 위치 기록 앱
 publish_to: 'none'
-version: 1.0.3+4
+version: 1.0.4+5
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -56,7 +56,9 @@ dependencies:
   url_launcher: ^6.3.1
   google_mobile_ads: ^8.0.0
   share_plus: ^13.1.0
-  in_app_purchase: ^3.2.3
+  # Google Play Billing Library 8.0.0+ 의무화(2026-08-31) 대응:
+  # in_app_purchase 3.3.0 → in_app_purchase_android 0.5.x (Billing 8 내장)
+  in_app_purchase: ^3.3.0
 
   # 사진 EXIF 메타데이터 제거 — 카카오톡 공유/외부 전송 시 촬영 위치(GPS) 노출 방지.
   # PIPA / 위치정보법 컴플라이언스: 사진에 박힌 GPS 좌표가 PII 로 분류됨.
