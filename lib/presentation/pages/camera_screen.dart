@@ -28,6 +28,15 @@ import 'package:path_provider/path_provider.dart';
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
 
+  /// 앱 시작 시 카메라 목록을 미리 조회해 캐싱한다(카메라를 열지는 않음 —
+  /// 권한 불필요). 첫 카메라 진입 시 `availableCameras()` 채널 왕복을 없애
+  /// 프리뷰 표시를 앞당긴다. 실패해도 진입 시 다시 조회하므로 무시.
+  static Future<void> warmUpCameras() async {
+    try {
+      _CameraScreenState._cachedCameras ??= await availableCameras();
+    } catch (_) {}
+  }
+
   @override
   State<CameraScreen> createState() => _CameraScreenState();
 }
@@ -88,7 +97,6 @@ class _CameraScreenState extends State<CameraScreen>
   static const double _guideBoxWidth = 280.0;
   static const double _guideBoxHeight = 160.0;
   static const double _shutterDiameter = 76.0;
-  static const Duration _shutterCooldown = Duration(milliseconds: 300);
 
   String _statusMessage = '구역을 가이드 안에 비춰 주세요';
 
@@ -224,6 +232,10 @@ class _CameraScreenState extends State<CameraScreen>
   //  Camera init
   // ──────────────────────────────────────────────────────────────────────────
 
+  /// `availableCameras()` 는 매 진입마다 결과가 같으므로 1회만 조회해 캐시.
+  /// 재진입 시 채널 왕복 1회를 아껴 프리뷰 표시를 앞당긴다.
+  static List<CameraDescription>? _cachedCameras;
+
   Future<void> _initCamera() async {
     // ── Reentrancy guard ──────────────────────────────────────────────────
     //   위젯 콜드 스타트 시 initState 의 _initCamera() #1 가 `await initialize()`
@@ -235,7 +247,7 @@ class _CameraScreenState extends State<CameraScreen>
     }
     _initInProgress = true;
     try {
-      final cameras = await availableCameras();
+      final cameras = _cachedCameras ??= await availableCameras();
       if (cameras.isEmpty) {
         _setStatus('사용 가능한 카메라가 없습니다');
         return;
@@ -260,38 +272,6 @@ class _CameraScreenState extends State<CameraScreen>
         await controller.dispose();
         return;
       }
-      // 줌 범위 로드 — 일부 광각 렌즈는 minZoom < 1.0 이지만 UX 단순화를 위해
-      // 사용자 표시는 1.0 부터 시작. setZoomLevel 호출 시는 내부 minZoom 클램프.
-      try {
-        _minZoom = await controller.getMinZoomLevel();
-        _maxZoom = await controller.getMaxZoomLevel();
-        _currentZoom = _minZoom.clamp(1.0, _maxZoom);
-        await controller.setZoomLevel(_currentZoom);
-      } catch (e) {
-        debugPrint('[Camera] zoom 범위 조회 실패: $e');
-        _minZoom = 1.0;
-        _maxZoom = 1.0;
-        _currentZoom = 1.0;
-      }
-      // 가운데(번호가 오는 곳)에 초점·노출 고정 — 멀리서 차+기둥을 함께 잡을 때
-      // 카메라가 가까운 차/배경에 초점을 빼앗겨 가운데 기둥 번호가 흐려져 인식이
-      // 안 되던 문제 방지. 사용자가 화면을 탭하면 그 지점으로 다시 잡는다(_onTapFocus).
-      try {
-        await controller.setFocusMode(FocusMode.auto);
-        await controller.setFocusPoint(const Offset(0.5, 0.5));
-        await controller.setExposureMode(ExposureMode.auto);
-        await controller.setExposurePoint(const Offset(0.5, 0.5));
-      } catch (e) {
-        debugPrint('[Camera] 중앙 초점 설정 실패: $e');
-      }
-      // 플래시 기본값(auto)은 어두운 주차장에서 takePicture 마다 측광
-      // (precapture) 시퀀스를 돌려 1~2초 셔터랙을 만든다. 라이브 OCR 은 이미
-      // 무플래시 프리뷰 프레임으로 동작하므로 off 로 고정해 지연을 제거한다.
-      try {
-        await controller.setFlashMode(FlashMode.off);
-      } catch (e) {
-        debugPrint('[Camera] 플래시 off 설정 실패: $e');
-      }
       // initialize 중에 lifecycle 이 끼어들어서 기존 controller 가 떨어져 나갔다면
       // 새로 만든 것도 stale 이 아니지만, 안전을 위해 기존 controller 가 살아있다면
       // 정리 후 교체.
@@ -301,11 +281,16 @@ class _CameraScreenState extends State<CameraScreen>
           await old.dispose();
         } catch (_) {}
       }
+      // ── 프리뷰 즉시 표시 ──────────────────────────────────────────────────
+      // 하드웨어 초기화가 끝난 시점에 바로 프리뷰를 띄운다. 줌·초점·노출·플래시
+      // 설정은 각각 네이티브 채널 왕복이라 순서대로 await 하면 로딩바가 그만큼
+      // 길어진다 → 프리뷰를 먼저 그리고 백그라운드로 이어서 적용한다.
       setState(() {
         _controller = controller;
         _isCameraReady = true;
       });
       WidgetsBinding.instance.addPostFrameCallback((_) => _startStream());
+      unawaited(_applyCameraDefaults(controller));
     } on CameraException catch (e) {
       if (e.code == 'CameraAccessDenied' ||
           e.code == 'CameraAccessDeniedWithoutPrompt' ||
@@ -319,6 +304,49 @@ class _CameraScreenState extends State<CameraScreen>
       _setStatus('카메라 초기화 실패: $e');
     } finally {
       _initInProgress = false;
+    }
+  }
+
+  /// 프리뷰 표시 후 백그라운드로 적용하는 카메라 기본 설정.
+  /// 프리뷰·스트림과 병행해도 안전한 호출들이며, 도중에 controller 가 교체·해제
+  /// 되면 CameraException 이 나므로 각 단계를 개별 try/catch 로 감싼다.
+  Future<void> _applyCameraDefaults(CameraController controller) async {
+    bool stale() => !mounted || _controller != controller;
+    // 플래시 기본값(auto)은 어두운 주차장에서 takePicture 마다 측광
+    // (precapture) 시퀀스를 돌려 1~2초 셔터랙을 만든다. 라이브 OCR 은 이미
+    // 무플래시 프리뷰 프레임으로 동작하므로 off 로 고정해 지연을 제거한다.
+    try {
+      if (stale()) return;
+      await controller.setFlashMode(FlashMode.off);
+    } catch (e) {
+      debugPrint('[Camera] 플래시 off 설정 실패: $e');
+    }
+    // 가운데(번호가 오는 곳)에 초점·노출 고정 — 멀리서 차+기둥을 함께 잡을 때
+    // 카메라가 가까운 차/배경에 초점을 빼앗겨 가운데 기둥 번호가 흐려져 인식이
+    // 안 되던 문제 방지. 사용자가 화면을 탭하면 그 지점으로 다시 잡는다(_onTapFocus).
+    try {
+      if (stale()) return;
+      await controller.setFocusMode(FocusMode.auto);
+      await controller.setFocusPoint(const Offset(0.5, 0.5));
+      await controller.setExposureMode(ExposureMode.auto);
+      await controller.setExposurePoint(const Offset(0.5, 0.5));
+    } catch (e) {
+      debugPrint('[Camera] 중앙 초점 설정 실패: $e');
+    }
+    // 줌 범위 로드 — 일부 광각 렌즈는 minZoom < 1.0 이지만 UX 단순화를 위해
+    // 사용자 표시는 1.0 부터 시작. setZoomLevel 호출 시는 내부 minZoom 클램프.
+    try {
+      if (stale()) return;
+      _minZoom = await controller.getMinZoomLevel();
+      _maxZoom = await controller.getMaxZoomLevel();
+      _currentZoom = _minZoom.clamp(1.0, _maxZoom);
+      if (stale()) return;
+      await controller.setZoomLevel(_currentZoom);
+    } catch (e) {
+      debugPrint('[Camera] zoom 범위 조회 실패: $e');
+      _minZoom = 1.0;
+      _maxZoom = 1.0;
+      _currentZoom = 1.0;
     }
   }
 
@@ -1011,7 +1039,7 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  //  Shutter — 300ms 쿨타임 + takePicture + pop
+  //  Shutter — takePicture + pop
   // ──────────────────────────────────────────────────────────────────────────
 
   Future<void> _onShutter() async {
@@ -1024,19 +1052,15 @@ class _CameraScreenState extends State<CameraScreen>
     // 셔터를 막지 않도록 햅틱은 대기하지 않는다.
     unawaited(HapticFeedback.mediumImpact());
 
+    final sw = Stopwatch()..start();
     String? tempPath;
     String? savedPath;
     try {
-      if (controller.value.isStreamingImages) {
-        await controller.stopImageStream();
-      }
-      int waited = 0;
-      while (_isProcessing && waited < 10) {
-        await Future.delayed(const Duration(milliseconds: 30));
-        waited++;
-      }
-      await Future.delayed(_shutterCooldown);
-
+      // 스트림은 멈추지 않는다 — stopImageStream 은 CameraX use case unbind →
+      // 세션 재구성을 유발해 그 자체로 수백 ms 셔터랙을 만들었다(+ 기존 300ms
+      // 고정 쿨다운, 최대 300ms OCR 완료 대기까지 ~1초). 새 프레임 OCR 은
+      // _onFrame 첫 줄의 _isCapturing 가드가 차단하고, 진행 중이던 프레임은
+      // 캡처와 버퍼를 공유하지 않으므로 그대로 끝나게 두면 된다.
       final XFile xFile = await controller.takePicture();
       tempPath = xFile.path;
       savedPath = await _savePhoto(tempPath);
@@ -1050,7 +1074,7 @@ class _CameraScreenState extends State<CameraScreen>
         'floorNum': _lastMatchedFloorNum ?? '',
         'imagePath': savedPath,
       };
-      debugPrint('[Camera] shutter pop → $result');
+      debugPrint('[Camera] shutter pop (${sw.elapsedMilliseconds}ms) → $result');
       Navigator.of(context).pop(result);
     } catch (e) {
       debugPrint('[Camera] 셔터 예외: $e');

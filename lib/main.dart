@@ -132,6 +132,10 @@ void main() async {
   // 스토어 미설정·오프라인에서도 graceful(배너는 폴백 동작).
   unawaited(BillingService.instance.init());
 
+  // 카메라 목록 사전 캐싱 — 첫 '신규등록' 진입 시 availableCameras() 채널
+  // 왕복을 제거해 프리뷰 표시를 앞당긴다(카메라를 열지 않으므로 권한 불필요).
+  unawaited(CameraScreen.warmUpCameras());
+
   _widgetChannel.setMethodCallHandler((call) async {
     if (call.method == 'onPayload') {
       final payload = call.arguments as String?;
