@@ -56,6 +56,8 @@ dependencies:
   url_launcher: ^6.3.1
   google_mobile_ads: ^8.0.0
   share_plus: ^13.1.0
+  # 설정 화면 버전 표시 — pubspec version 을 런타임에 읽어 하드코딩 불일치 방지
+  package_info_plus: ^10.2.1
   # Google Play Billing Library 8.0.0+ 의무화(2026-08-31) 대응:
   # in_app_purchase 3.3.0 → in_app_purchase_android 0.5.x (Billing 8 내장)
   in_app_purchase: ^3.3.0

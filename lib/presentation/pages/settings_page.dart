@@ -1,6 +1,7 @@
 import 'package:app_settings/app_settings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -47,14 +48,24 @@ class _SettingsPageState extends State<SettingsPage> {
   /// 자동 학습으로 확정된 '내 차' 정보. null 이면 아직 학습 전(학습 중).
   _TaggedCar? _learnedCar;
 
+  /// pubspec.yaml 의 version 을 런타임에 읽은 값. 로드 전에는 빈 문자열.
+  String _appVersion = '';
+
   @override
   void initState() {
     super.initState();
     _loadTaggedCar();
     _loadLearnedCar();
     _loadBtAutoEnabled();
+    _loadAppVersion();
     // 상품 조회 / 영속 플래그 로드 (main 에서 이미 호출 — 멱등).
     BillingService.instance.init();
+  }
+
+  /// 앱 버전을 플랫폼에서 읽어 표시용으로 저장한다.
+  Future<void> _loadAppVersion() async {
+    final info = await PackageInfo.fromPlatform();
+    if (mounted) setState(() => _appVersion = info.version);
   }
 
   /// BT 자동 감지 토글 상태를 영속 저장소에서 로드한다. 기본값 true.
@@ -453,8 +464,7 @@ class _SettingsPageState extends State<SettingsPage> {
               _InfoRow(
                 icon: Icons.info_outline_rounded,
                 label: '버전',
-                // pubspec.yaml 의 version 과 함께 올릴 것.
-                value: '1.0.3',
+                value: _appVersion,
               ),
               const _Divider(),
               _ActionRow(
