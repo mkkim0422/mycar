@@ -342,6 +342,10 @@ class _CameraScreenState extends State<CameraScreen>
       _currentZoom = _minZoom.clamp(1.0, _maxZoom);
       if (stale()) return;
       await controller.setZoomLevel(_currentZoom);
+      // build 의 zoomSupported(_maxZoom > _minZoom)가 핀치 제스처 핸들러 부착을
+      // 결정하므로, 범위 로드 후 rebuild 를 트리거해야 핀치 줌이 활성화된다.
+      // (프리뷰 먼저 그리는 최적화로 이 시점엔 이미 build 가 지나가 있음)
+      if (!stale()) setState(() {});
     } catch (e) {
       debugPrint('[Camera] zoom 범위 조회 실패: $e');
       _minZoom = 1.0;
