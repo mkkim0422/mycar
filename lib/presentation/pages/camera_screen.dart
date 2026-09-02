@@ -214,6 +214,12 @@ class _CameraScreenState extends State<CameraScreen>
       setState(() {
         _controller = null;
         _isCameraReady = false;
+        // 줌 상태도 함께 리셋 — 복귀 후 새 카메라 세션은 1.0x 로 시작하므로
+        // 남겨두면 defaults 적용 전에 시작된 스트림이 풀화면 프레임을 옛
+        // 배율로 크롭(_cropNv21Center)하고, 옛 배율 인디케이터도 남는다.
+        _minZoom = 1.0;
+        _maxZoom = 1.0;
+        _currentZoom = 1.0;
       });
       WidgetsBinding.instance.addPostFrameCallback((_) {
         c.dispose();
@@ -334,23 +340,44 @@ class _CameraScreenState extends State<CameraScreen>
       debugPrint('[Camera] 중앙 초점 설정 실패: $e');
     }
     // 줌 범위 로드 — 일부 광각 렌즈는 minZoom < 1.0 이지만 UX 단순화를 위해
-    // 사용자 표시는 1.0 부터 시작. setZoomLevel 호출 시는 내부 minZoom 클램프.
+    // 사용자 표시는 1.0 부터 시작. 두 getter 는 독립 읽기 채널 왕복이라 병렬 조회.
     try {
       if (stale()) return;
-      _minZoom = await controller.getMinZoomLevel();
-      _maxZoom = await controller.getMaxZoomLevel();
-      _currentZoom = _minZoom.clamp(1.0, _maxZoom);
+      final levels = await Future.wait(
+          [controller.getMinZoomLevel(), controller.getMaxZoomLevel()]);
+      double minZ = levels[0];
+      double maxZ = levels[1];
+      // 플랫폼이 역전된 범위(max < min)를 보고하면 줌 미지원으로 취급.
+      // num.clamp 는 lower > upper 면 ArgumentError 라 방어 필수.
+      if (maxZ < minZ) {
+        minZ = 1.0;
+        maxZ = 1.0;
+      }
+      final double startZ = minZ >= 1.0 ? minZ : (maxZ >= 1.0 ? 1.0 : maxZ);
       if (stale()) return;
-      await controller.setZoomLevel(_currentZoom);
-      // build 의 zoomSupported(_maxZoom > _minZoom)가 핀치 제스처 핸들러 부착을
-      // 결정하므로, 범위 로드 후 rebuild 를 트리거해야 핀치 줌이 활성화된다.
-      // (프리뷰 먼저 그리는 최적화로 이 시점엔 이미 build 가 지나가 있음)
-      if (!stale()) setState(() {});
+      // 이 필드들은 build(줌 인디케이터·크롭 배율)가 읽으므로 setState 로 반영.
+      // stale 재확인 후 한 번에 대입 — 교체된 컨트롤러의 늦은 응답이 살아있는
+      // 컨트롤러의 값을 덮어쓰거나, min/max 가 찢어진 상태로 그려지는 것 방지.
+      setState(() {
+        _minZoom = minZ;
+        _maxZoom = maxZ;
+        _currentZoom = startZ;
+        _baseScaleZoom = startZ;
+      });
+      // 시작 배율 적용 실패(세션 바인딩 중 등)는 범위와 무관 — 범위는 유지.
+      try {
+        await controller.setZoomLevel(startZ);
+      } catch (e) {
+        debugPrint('[Camera] 초기 setZoomLevel 실패: $e');
+      }
     } catch (e) {
       debugPrint('[Camera] zoom 범위 조회 실패: $e');
-      _minZoom = 1.0;
-      _maxZoom = 1.0;
-      _currentZoom = 1.0;
+      if (stale()) return;
+      setState(() {
+        _minZoom = 1.0;
+        _maxZoom = 1.0;
+        _currentZoom = 1.0;
+      });
     }
   }
 
@@ -1151,10 +1178,12 @@ class _CameraScreenState extends State<CameraScreen>
   Future<void> _onScaleUpdate(ScaleUpdateDetails d) async {
     final c = _controller;
     if (c == null || !c.value.isInitialized) return;
-    if (_maxZoom <= _minZoom) return; // 줌 미지원 기기
-    // base × scale 후 [minZoom..maxZoom] 으로 클램프 (사용자 표시는 ≥1.0).
+    if (_maxZoom <= _minZoom) return; // 줌 미지원 기기(또는 범위 로드 전)
+    // base × scale 후 [하한..maxZoom] 클램프. 하한은 1.0 — 광각 렌즈로
+    // minZoom < 1.0 인 기기에서도 사용자 표시 배율은 1.0 아래로 안 내려간다.
+    final double lower = _minZoom >= 1.0 ? _minZoom : (_maxZoom >= 1.0 ? 1.0 : _maxZoom);
     final target =
-        (_baseScaleZoom * d.scale).clamp(_minZoom, _maxZoom).toDouble();
+        (_baseScaleZoom * d.scale).clamp(lower, _maxZoom).toDouble();
     if ((target - _currentZoom).abs() < 0.01) return; // 미세 변동 무시
     try {
       await c.setZoomLevel(target);
@@ -1208,14 +1237,15 @@ class _CameraScreenState extends State<CameraScreen>
   @override
   Widget build(BuildContext context) {
     if (_permissionDenied) return _buildPermissionDeniedScreen();
-    final zoomSupported = _maxZoom > _minZoom;
     return Scaffold(
       backgroundColor: Colors.black,
       // GestureDetector 로 전체 화면 핀치 인식. 셔터 버튼은 위에 쌓여 있어
       // 별도 GestureDetector 가 우선 처리되므로 셔터 동작과 충돌하지 않는다.
+      // 핸들러는 항상 부착 — 줌 미지원/범위 로드 전 가드는 _onScaleUpdate 안에
+      // 있으므로, 부착을 조건부로 하면 범위 로드 때마다 rebuild 가 필요해진다.
       body: GestureDetector(
-        onScaleStart: zoomSupported ? _onScaleStart : null,
-        onScaleUpdate: zoomSupported ? _onScaleUpdate : null,
+        onScaleStart: _onScaleStart,
+        onScaleUpdate: _onScaleUpdate,
         onTapUp: _onTapFocus,
         child: Stack(
           key: _previewContainerKey,
@@ -1256,7 +1286,7 @@ class _CameraScreenState extends State<CameraScreen>
                 ),
               ),
             // 줌 인디케이터 — 셔터 위쪽 중앙, 1.0 보다 큰 줌일 때만 노출.
-            if (zoomSupported && _currentZoom > 1.05)
+            if (_currentZoom > 1.05)
               Positioned(
                 bottom: 36 +
                     MediaQuery.of(context).padding.bottom +
