@@ -1171,6 +1171,37 @@ class _CameraScreenState extends State<CameraScreen>
   //  Zoom — 핀치 제스처 + setZoomLevel
   // ──────────────────────────────────────────────────────────────────────────
 
+  /// 갤럭시 순정 카메라식 배율 프리셋: [초광각(있으면), 1x, 망원(범위가 되면 3x
+  /// 아니면 2x)]. 실제 기기 줌 범위로부터 계산한다.
+  List<double> get _zoomPresets {
+    final presets = <double>[];
+    if (_minZoom < 0.95) presets.add(_minZoom);
+    presets.add(1.0);
+    if (_maxZoom >= 2.9) {
+      presets.add(3.0);
+    } else if (_maxZoom >= 1.9) {
+      presets.add(2.0);
+    }
+    return presets;
+  }
+
+  Future<void> _setZoomPreset(double z) async {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) return;
+    final target = z.clamp(_minZoom, _maxZoom).toDouble();
+    HapticFeedback.selectionClick();
+    try {
+      await c.setZoomLevel(target);
+      if (!mounted) return;
+      setState(() {
+        _currentZoom = target;
+        _baseScaleZoom = target;
+      });
+    } catch (e) {
+      debugPrint('[Camera] 줌 프리셋 적용 실패: $e');
+    }
+  }
+
   void _onScaleStart(ScaleStartDetails d) {
     // 현재 줌을 스냅샷 — 이후 onScaleUpdate 에서 누적이 아니라 base × scale.
     _baseScaleZoom = _currentZoom;
@@ -1285,9 +1316,9 @@ class _CameraScreenState extends State<CameraScreen>
                   ),
                 ),
               ),
-            // 줌 인디케이터 — 셔터 위쪽 중앙, 1.0x 에서 벗어났을 때만 노출
-            // (확대·초광각 축소 양방향).
-            if ((_currentZoom - 1.0).abs() > 0.05)
+            // 줌 프리셋 바 — 갤럭시 순정 카메라처럼 셔터 위에 배율 칩
+            // (.6 / 1 / 3 등)을 항상 표시. 탭으로 전환, 활성 칩엔 현재 배율.
+            if (_maxZoom > _minZoom)
               Positioned(
                 bottom: 36 +
                     MediaQuery.of(context).padding.bottom +
@@ -1295,7 +1326,13 @@ class _CameraScreenState extends State<CameraScreen>
                     20,
                 left: 0,
                 right: 0,
-                child: Center(child: _ZoomIndicator(zoom: _currentZoom)),
+                child: Center(
+                  child: _ZoomPresetBar(
+                    presets: _zoomPresets,
+                    current: _currentZoom,
+                    onSelect: _setZoomPreset,
+                  ),
+                ),
               ),
             Positioned(
               bottom: 36 + MediaQuery.of(context).padding.bottom,
@@ -1741,27 +1778,79 @@ class _CornerFramePainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-/// 핀치 줌 인디케이터 — 현재 배율을 작은 알약 형태로 표시.
-class _ZoomIndicator extends StatelessWidget {
-  final double zoom;
-  const _ZoomIndicator({required this.zoom});
+/// 갤럭시 순정 카메라식 줌 프리셋 바 — 반투명 알약 안에 배율 칩(.6 / 1 / 3 등).
+/// 활성 칩은 원형 하이라이트 + 현재 배율(예: 1.5x), 비활성 칩은 프리셋 숫자만.
+class _ZoomPresetBar extends StatelessWidget {
+  final List<double> presets;
+  final double current;
+  final ValueChanged<double> onSelect;
+  const _ZoomPresetBar({
+    required this.presets,
+    required this.current,
+    required this.onSelect,
+  });
+
+  /// 현재 배율이 속한 프리셋 인덱스 — 현재 배율 이하 중 가장 큰 프리셋.
+  int get _activeIndex {
+    var active = 0;
+    for (var i = 0; i < presets.length; i++) {
+      if (current >= presets[i] - 0.05) active = i;
+    }
+    return active;
+  }
+
+  /// 비활성 칩 라벨 — 갤럭시처럼 "0.6"→".6", "1.0"→"1", "3.0"→"3".
+  static String _presetLabel(double z) {
+    if (z < 1.0) return '.${(z * 10).round()}';
+    final rounded = z.round();
+    return (z - rounded).abs() < 0.05 ? '$rounded' : z.toStringAsFixed(1);
+  }
 
   @override
   Widget build(BuildContext context) {
+    final active = _activeIndex;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.6),
-        borderRadius: BorderRadius.circular(20),
+        color: Colors.black.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(24),
       ),
-      child: Text(
-        '${zoom.toStringAsFixed(1)}x',
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 13,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.5,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < presets.length; i++)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => onSelect(presets[i]),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                margin: const EdgeInsets.symmetric(horizontal: 2),
+                padding: EdgeInsets.symmetric(
+                  horizontal: i == active ? 12 : 9,
+                  vertical: 7,
+                ),
+                decoration: BoxDecoration(
+                  color: i == active
+                      ? Colors.black.withValues(alpha: 0.55)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  i == active
+                      ? '${current.toStringAsFixed(1)}x'
+                      : _presetLabel(presets[i]),
+                  style: TextStyle(
+                    color: i == active
+                        ? const Color(0xFFFFD54F) // 갤럭시처럼 활성 배율 강조색
+                        : Colors.white,
+                    fontSize: i == active ? 13 : 12,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
