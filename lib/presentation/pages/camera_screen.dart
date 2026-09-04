@@ -339,8 +339,9 @@ class _CameraScreenState extends State<CameraScreen>
     } catch (e) {
       debugPrint('[Camera] 중앙 초점 설정 실패: $e');
     }
-    // 줌 범위 로드 — 일부 광각 렌즈는 minZoom < 1.0 이지만 UX 단순화를 위해
-    // 사용자 표시는 1.0 부터 시작. 두 getter 는 독립 읽기 채널 왕복이라 병렬 조회.
+    // 줌 범위 로드 — 순정 카메라처럼 기기 전체 범위 사용: minZoom < 1.0 이면
+    // 초광각(0.6x 등)까지 축소 허용, 시작 배율만 순정과 동일하게 1.0x.
+    // 두 getter 는 독립 읽기 채널 왕복이라 병렬 조회.
     try {
       if (stale()) return;
       final levels = await Future.wait(
@@ -1179,11 +1180,10 @@ class _CameraScreenState extends State<CameraScreen>
     final c = _controller;
     if (c == null || !c.value.isInitialized) return;
     if (_maxZoom <= _minZoom) return; // 줌 미지원 기기(또는 범위 로드 전)
-    // base × scale 후 [하한..maxZoom] 클램프. 하한은 1.0 — 광각 렌즈로
-    // minZoom < 1.0 인 기기에서도 사용자 표시 배율은 1.0 아래로 안 내려간다.
-    final double lower = _minZoom >= 1.0 ? _minZoom : (_maxZoom >= 1.0 ? 1.0 : _maxZoom);
+    // base × scale 후 기기 전체 범위 [minZoom..maxZoom] 클램프 — 순정 카메라처럼
+    // minZoom < 1.0 인 기기에선 초광각(0.6x 등)까지 축소 가능.
     final target =
-        (_baseScaleZoom * d.scale).clamp(lower, _maxZoom).toDouble();
+        (_baseScaleZoom * d.scale).clamp(_minZoom, _maxZoom).toDouble();
     if ((target - _currentZoom).abs() < 0.01) return; // 미세 변동 무시
     try {
       await c.setZoomLevel(target);
@@ -1285,8 +1285,9 @@ class _CameraScreenState extends State<CameraScreen>
                   ),
                 ),
               ),
-            // 줌 인디케이터 — 셔터 위쪽 중앙, 1.0 보다 큰 줌일 때만 노출.
-            if (_currentZoom > 1.05)
+            // 줌 인디케이터 — 셔터 위쪽 중앙, 1.0x 에서 벗어났을 때만 노출
+            // (확대·초광각 축소 양방향).
+            if ((_currentZoom - 1.0).abs() > 0.05)
               Positioned(
                 bottom: 36 +
                     MediaQuery.of(context).padding.bottom +
